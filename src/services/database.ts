@@ -146,6 +146,22 @@ export class Database {
     return !!data;
   }
 
+  /**
+   * Delete a wallet.
+   */
+  async deleteWallet(userId: string): Promise<boolean> {
+    const { error } = await this.client
+      .from('tb_wallets')
+      .delete()
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error('Supabase delete error:', error.message);
+    }
+
+    return !error;
+  }
+
   // ============================================
   // POSITION OPERATIONS
   // ============================================

@@ -427,6 +427,75 @@ _This key gives full access to your wallet_
 }
 
 /**
+ * Show delete wallet confirmation.
+ */
+export async function showDeleteWalletConfirm(ctx: BotContext): Promise<void> {
+  const message = `
+🗑️ *Delete Wallet*
+
+⚠️ *WARNING:*
+• This will permanently delete your wallet from the bot
+• Make sure you have exported and saved your private key first!
+• You will need to create a new wallet or import one to continue trading
+
+Are you sure you want to delete your wallet?
+  `.trim();
+
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: '✅ Yes, Delete', callback_data: 'wallet:confirm_delete' },
+        { text: '❌ Cancel', callback_data: 'menu:wallet' },
+      ],
+    ],
+  };
+
+  try {
+    await ctx.editMessageText(message, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard,
+    });
+  } catch {
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard,
+    });
+  }
+}
+
+/**
+ * Delete wallet.
+ */
+export async function deleteWallet(ctx: BotContext): Promise<void> {
+  const userId = getUserId(ctx);
+
+  try {
+    // Delete from database
+    const deleted = await db.deleteWallet(userId);
+
+    if (!deleted) {
+      throw new Error('Failed to delete wallet');
+    }
+
+    const message = `
+✅ *Wallet Deleted*
+
+Your wallet has been removed from the bot.
+
+You can now create a new wallet or import an existing one.
+    `.trim();
+
+    await ctx.editMessageText(message, {
+      parse_mode: 'Markdown',
+      reply_markup: walletMenuKeyboard(false),
+    });
+  } catch (error) {
+    console.error('Error deleting wallet:', error);
+    await sendError(ctx, 'Failed to delete wallet. Please try again.');
+  }
+}
+
+/**
  * Show withdraw prompt.
  */
 export async function showWithdrawPrompt(ctx: BotContext): Promise<void> {

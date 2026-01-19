@@ -38,7 +38,9 @@ export function walletMenuKeyboard(hasWallet: boolean): InlineKeyboard {
     .text('📤 Withdraw', 'wallet:withdraw')
     .text('🔑 Export Key', 'wallet:export')
     .row()
+    .text('🗑️ Delete Wallet', 'wallet:delete')
     .text('🔄 Refresh', 'wallet:refresh')
+    .row()
     .text('« Back', 'menu:main');
 }
 

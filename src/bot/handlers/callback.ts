@@ -15,6 +15,8 @@ import {
   showExportKeyConfirm,
   exportPrivateKey,
   showWithdrawPrompt,
+  showDeleteWalletConfirm,
+  deleteWallet,
 } from '../commands/wallet.js';
 import {
   showTradeMenu,
@@ -112,6 +114,16 @@ export async function handleCallback(ctx: BotContext): Promise<void> {
 
     if (data === 'wallet:withdraw') {
       await showWithdrawPrompt(ctx);
+      return;
+    }
+
+    if (data === 'wallet:delete') {
+      await showDeleteWalletConfirm(ctx);
+      return;
+    }
+
+    if (data === 'wallet:confirm_delete') {
+      await deleteWallet(ctx);
       return;
     }
 
