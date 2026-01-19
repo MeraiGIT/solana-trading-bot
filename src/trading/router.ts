@@ -18,6 +18,8 @@ export interface RouterConfig {
   defaultSlippageBps?: number;
   defaultPriorityFee?: number; // In lamports for Jupiter, SOL for PumpFun
   preferPumpPortal?: boolean; // Prefer PumpPortal even for graduated tokens
+  useJito?: boolean; // Enable Jito bundles for MEV protection
+  heliusApiKey?: string; // For dynamic priority fees
 }
 
 export interface TradeParams {
@@ -55,6 +57,8 @@ export class DexRouter {
     this.jupiter = new JupiterClient(config.rpcUrl, {
       defaultSlippageBps: config.defaultSlippageBps ?? 500,
       defaultPriorityFee: config.defaultPriorityFee ?? 100000,
+      useJito: config.useJito ?? true, // Enable Jito by default
+      heliusApiKey: config.heliusApiKey,
     });
 
     this.pumpfun = new PumpFunClient(config.rpcUrl, {
@@ -63,6 +67,8 @@ export class DexRouter {
     });
 
     this.tokenInfo = new TokenInfoService();
+
+    console.log(`[DexRouter] Initialized with Jito: ${config.useJito ?? true}, Helius: ${config.heliusApiKey ? 'Yes' : 'No'}`);
   }
 
   /**

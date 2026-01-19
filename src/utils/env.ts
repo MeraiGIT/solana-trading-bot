@@ -32,6 +32,10 @@ export interface AppConfig {
   defaultSlippageBps: number;
   maxPriorityFeeLamports: number;
 
+  // MEV Protection
+  useJito: boolean;
+  jitoTipLamports: number;
+
   // Logging
   logLevel: string;
 }
@@ -108,6 +112,10 @@ function loadConfig(): AppConfig {
     // Trading defaults (with sensible defaults)
     defaultSlippageBps: parseInt(process.env.DEFAULT_SLIPPAGE_BPS || '500', 10),
     maxPriorityFeeLamports: parseInt(process.env.MAX_PRIORITY_FEE_LAMPORTS || '100000', 10),
+
+    // MEV Protection
+    useJito: process.env.USE_JITO !== 'false', // Enabled by default
+    jitoTipLamports: parseInt(process.env.JITO_TIP_LAMPORTS || '10000', 10),
 
     // Logging
     logLevel: process.env.LOG_LEVEL || 'info',

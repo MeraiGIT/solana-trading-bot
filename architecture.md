@@ -101,10 +101,12 @@ Private Key → PBKDF2(master_key + salt + user_id) → AES-256-GCM → Database
 | Component | File | Description |
 |-----------|------|-------------|
 | Router | `router.ts` | Auto-selects Jupiter or PumpPortal |
-| Jupiter | `jupiter.ts` | Jupiter API v1 client |
+| Jupiter | `jupiter.ts` | Jupiter API v1 client with Jito integration |
 | PumpPortal | `pumpfun.ts` | PumpPortal API client |
 | TokenInfo | `tokenInfo.ts` | DexScreener price/info service |
 | PriceMonitor | `priceMonitor.ts` | SL/TP background monitoring |
+| Jito | `jito.ts` | Jito bundle client for MEV protection |
+| PriorityFee | `priorityFee.ts` | Dynamic priority fee service |
 
 **DEX Selection Logic**:
 ```typescript
@@ -118,7 +120,9 @@ async selectDex(tokenMint: string): Promise<'jupiter' | 'pumpfun'> {
 ```
 
 **MEV Protection Features**:
-- Priority fees (100,000+ lamports)
+- **Jito Bundles**: Private mempool submission for hiding transactions from MEV bots
+- **Dynamic Priority Fees**: Fetched from Helius API or RPC based on network conditions
+- Priority fees scale with trade value (higher value = higher fee)
 - Retry with exponential backoff
 - Transaction confirmation waiting
 - Auto pool selection (PumpPortal)
@@ -132,6 +136,46 @@ async selectDex(tokenMint: string): Promise<'jupiter' | 'pumpfun'> {
 2. Check current price vs trigger price
 3. If triggered, execute sell via trading engine
 4. Update order status and notify user
+
+### 5. MEV Protection (`src/trading/jito.ts`, `src/trading/priorityFee.ts`)
+
+**Purpose**: Protect trades from frontrunning and sandwich attacks
+
+**Components**:
+
+1. **Jito Bundle Client** (`jito.ts`)
+   - Sends transactions through Jito's private mempool
+   - Transactions hidden from MEV bots until block inclusion
+   - Automatic tip transactions to Jito validators
+   - Bundle status tracking and confirmation
+
+2. **Priority Fee Service** (`priorityFee.ts`)
+   - Fetches current network conditions from Helius API
+   - Falls back to RPC-based estimation if Helius unavailable
+   - Dynamic fee calculation based on trade value and urgency
+   - Caches estimates for 10 seconds to reduce API calls
+
+**MEV Protection Flow**:
+```
+1. Trade requested
+2. Calculate dynamic priority fee (based on trade value)
+3. Build swap transaction via Jupiter/PumpPortal
+4. If Jito enabled:
+   a. Create tip transaction
+   b. Bundle swap + tip transactions
+   c. Submit to Jito block engine
+   d. Wait for confirmation
+5. If Jito fails or disabled:
+   a. Submit via regular RPC with high priority fee
+   b. Retry with exponential backoff
+```
+
+**Configuration** (via environment variables):
+```
+USE_JITO=true              # Enable/disable Jito bundles
+JITO_TIP_LAMPORTS=10000    # Default tip amount (0.00001 SOL)
+HELIUS_API_KEY=xxx         # For dynamic priority fee estimates
+```
 
 ---
 
@@ -215,6 +259,18 @@ tb_user_settings
 - **Recommended**: Helius or QuickNode (private RPC for MEV protection)
 - **Purpose**: Send transactions, get balances
 
+### Jito Block Engine API
+- **Base URL**: `https://mainnet.block-engine.jito.wtf`
+- **Alt Endpoints**: amsterdam, frankfurt, ny, tokyo
+- **Endpoints**: `/api/v1/bundles` (sendBundle, getBundleStatuses)
+- **Purpose**: Private mempool for MEV-protected transaction submission
+- **Tip Floor API**: `https://bundles.jito.wtf/api/v1/bundles/tip_floor`
+
+### Helius API
+- **Base URL**: `https://mainnet.helius-rpc.com`
+- **Endpoint**: `getPriorityFeeEstimate` (JSON-RPC)
+- **Purpose**: Get current network priority fee recommendations
+
 ---
 
 ## Security Architecture
@@ -290,9 +346,12 @@ tb_user_settings
 
 ### Environment Variables
 ```
-BOT_TOKEN
-SUPABASE_URL
-SUPABASE_ANON_KEY
-SOLANA_RPC_URL
-MASTER_ENCRYPTION_KEY
+BOT_TOKEN                # Telegram bot token
+SUPABASE_URL             # Supabase project URL
+SUPABASE_ANON_KEY        # Supabase anon key
+SOLANA_RPC_URL           # Solana RPC endpoint
+MASTER_ENCRYPTION_KEY    # 64-char hex key for wallet encryption
+HELIUS_API_KEY           # (Optional) For dynamic priority fees
+USE_JITO                 # (Optional) Enable Jito bundles (default: true)
+JITO_TIP_LAMPORTS        # (Optional) Default Jito tip (default: 10000)
 ```

@@ -16,3 +16,10 @@ export type { RouterConfig, UnifiedTradeResult } from './router.js';
 
 export { PriceMonitor } from './priceMonitor.js';
 export type { LimitOrder, OrderType } from './priceMonitor.js';
+
+// MEV Protection
+export { JitoClient, getJitoTipFloor, JITO_ENDPOINTS, JITO_TIP_ACCOUNTS } from './jito.js';
+export type { BundleResult, JitoConfig } from './jito.js';
+
+export { PriorityFeeService, PriorityLevel, getQuickPriorityFee, formatPriorityFee } from './priorityFee.js';
+export type { PriorityFeeEstimate } from './priorityFee.js';

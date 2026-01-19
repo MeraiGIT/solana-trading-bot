@@ -6,6 +6,8 @@
  */
 
 import { Connection, VersionedTransaction, Keypair } from '@solana/web3.js';
+import { JitoClient, getJitoTipFloor } from './jito.js';
+import { PriorityFeeService } from './priorityFee.js';
 
 // Constants
 const JUPITER_QUOTE_API = 'https://api.jup.ag/swap/v1/quote';
@@ -99,17 +101,31 @@ export class JupiterClient {
   private connection: Connection;
   private defaultSlippageBps: number;
   private defaultPriorityFee: number;
+  private jitoClient: JitoClient | null = null;
+  private priorityFeeService: PriorityFeeService;
+  private useJito: boolean;
 
   constructor(
     rpcUrl: string,
     options?: {
       defaultSlippageBps?: number;
       defaultPriorityFee?: number; // In lamports
+      useJito?: boolean;
+      heliusApiKey?: string;
     }
   ) {
     this.connection = new Connection(rpcUrl, 'confirmed');
     this.defaultSlippageBps = options?.defaultSlippageBps ?? 500; // 5%
     this.defaultPriorityFee = options?.defaultPriorityFee ?? 100000; // 0.0001 SOL
+    this.useJito = options?.useJito ?? true; // Enable Jito by default
+
+    // Initialize Jito client if enabled
+    if (this.useJito) {
+      this.jitoClient = new JitoClient(rpcUrl);
+    }
+
+    // Initialize priority fee service
+    this.priorityFeeService = new PriorityFeeService(rpcUrl, options?.heliusApiKey);
   }
 
   /**
@@ -207,10 +223,26 @@ export class JupiterClient {
   }
 
   /**
+   * Get dynamic priority fee based on current network conditions
+   */
+  async getDynamicPriorityFee(tradeValueSol: number): Promise<number> {
+    try {
+      // Get fee based on trade value and high urgency for trading
+      return await this.priorityFeeService.calculateDynamicFee(
+        tradeValueSol,
+        7 // High urgency for trading
+      );
+    } catch {
+      return this.defaultPriorityFee;
+    }
+  }
+
+  /**
    * Execute a swap transaction
    *
    * MEV Protection:
-   * - Uses priority fees to front-run bots
+   * - Uses Jito bundles for private mempool (when enabled)
+   * - Dynamic priority fees based on network conditions
    * - Confirms with 'confirmed' commitment
    * - Retries with exponential backoff
    */
@@ -220,12 +252,22 @@ export class JupiterClient {
     options?: {
       priorityFee?: number;
       maxRetries?: number;
+      useJito?: boolean;
+      jitoTip?: number;
     }
   ): Promise<SwapResult> {
-    const priorityFee = options?.priorityFee ?? this.defaultPriorityFee;
     const maxRetries = options?.maxRetries ?? 3;
+    const shouldUseJito = options?.useJito ?? this.useJito;
 
     try {
+      // Calculate trade value for dynamic fee
+      const tradeValueSol = Number(quoteResponse.inAmount) / 1e9;
+
+      // Get dynamic priority fee if not specified
+      const priorityFee = options?.priorityFee ?? await this.getDynamicPriorityFee(tradeValueSol);
+
+      console.log(`[Jupiter] Trade: ${tradeValueSol.toFixed(4)} SOL, Priority fee: ${priorityFee} lamports, Jito: ${shouldUseJito}`);
+
       // Build the swap transaction
       const swapResponse = await this.buildSwapTransaction({
         quoteResponse,
@@ -248,19 +290,54 @@ export class JupiterClient {
       const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
       transaction.sign([keypair]);
 
-      // Send with retries
+      // Try Jito first if enabled
+      if (shouldUseJito && this.jitoClient) {
+        try {
+          // Get Jito tip (use provided or fetch current floor)
+          const jitoTip = options?.jitoTip ?? await getJitoTipFloor();
+
+          console.log(`[Jupiter] Sending via Jito with ${jitoTip} lamport tip`);
+
+          const jitoResult = await this.jitoClient.sendTransaction(
+            transaction,
+            keypair,
+            {
+              tipLamports: jitoTip,
+              waitForConfirmation: true,
+              maxWaitMs: 30000,
+            }
+          );
+
+          if (jitoResult.success && jitoResult.landed) {
+            console.log(`[Jupiter] Jito bundle landed: ${jitoResult.bundleId}`);
+            return {
+              success: true,
+              signature: jitoResult.signature,
+              inputAmount: quoteResponse.inAmount,
+              outputAmount: quoteResponse.outAmount,
+              priceImpact: quoteResponse.priceImpactPct,
+            };
+          }
+
+          // Jito failed, fall back to regular submission
+          console.log(`[Jupiter] Jito failed (${jitoResult.error}), falling back to regular submission`);
+        } catch (jitoErr) {
+          console.log(`[Jupiter] Jito error: ${(jitoErr as Error).message}, falling back to regular submission`);
+        }
+      }
+
+      // Regular submission (fallback or when Jito disabled)
       let signature: string | undefined;
       let lastError: Error | undefined;
 
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
           signature = await this.connection.sendTransaction(transaction, {
-            skipPreflight: false, // Enable preflight for safety
-            maxRetries: 0, // We handle retries ourselves
+            skipPreflight: false,
+            maxRetries: 0,
             preflightCommitment: 'confirmed',
           });
 
-          // Wait for confirmation
           const confirmation = await this.connection.confirmTransaction({
             signature,
             blockhash: transaction.message.recentBlockhash,
@@ -281,7 +358,6 @@ export class JupiterClient {
         } catch (err) {
           lastError = err as Error;
 
-          // Exponential backoff
           if (attempt < maxRetries - 1) {
             await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
           }

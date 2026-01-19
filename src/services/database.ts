@@ -108,6 +108,9 @@ export class Database {
    * Create or update a wallet.
    */
   async upsertWallet(wallet: WalletData): Promise<boolean> {
+    console.log('Upserting wallet for user:', wallet.userId);
+    console.log('Public address:', wallet.publicAddress);
+
     const { error } = await this.client
       .from('tb_wallets')
       .upsert({
@@ -116,10 +119,16 @@ export class Database {
         encrypted_private_key: wallet.encryptedPrivateKey,
         key_salt: wallet.salt,
         key_iv: wallet.iv,
+        auth_tag: wallet.authTag,
         is_imported: wallet.isImported,
       }, {
         onConflict: 'user_id'
       });
+
+    if (error) {
+      console.error('Supabase upsert error:', error.message);
+      console.error('Error details:', error);
+    }
 
     return !error;
   }
@@ -415,7 +424,7 @@ export class Database {
       encryptedPrivateKey: data.encrypted_private_key as string,
       salt: data.key_salt as string,
       iv: data.key_iv as string,
-      authTag: '', // Not stored separately in this schema
+      authTag: data.auth_tag as string,
       isImported: data.is_imported as boolean,
       createdAt: new Date(data.created_at as string),
     };
