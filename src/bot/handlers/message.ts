@@ -2,9 +2,15 @@
  * Message handlers for text input.
  */
 
-import { BotContext, getUserId } from '../bot.js';
+import { BotContext } from '../bot.js';
 import { handlePrivateKeyImport } from '../commands/wallet.js';
 import { WalletManager } from '../../wallet/manager.js';
+import {
+  handleTokenInput,
+  handleBuy,
+  createStopLoss,
+  createTakeProfit,
+} from '../commands/trade.js';
 
 /**
  * Handle text messages based on current session state.
@@ -25,15 +31,21 @@ export async function handleMessage(ctx: BotContext): Promise<void> {
       break;
 
     case 'awaiting_token':
-      // TODO: Handle token address input (Phase 2)
-      await ctx.reply('🚧 Trading functionality coming soon!');
+      await handleTokenInput(ctx, text.trim());
       ctx.session.state = undefined;
       break;
 
     case 'awaiting_amount':
-      // TODO: Handle custom amount input (Phase 2)
-      await ctx.reply('🚧 Trading functionality coming soon!');
-      ctx.session.state = undefined;
+    case 'awaiting_buy_amount':
+      await handleBuyAmount(ctx, text.trim());
+      break;
+
+    case 'awaiting_sl_price':
+      await handleSlPrice(ctx, text.trim());
+      break;
+
+    case 'awaiting_tp_price':
+      await handleTpPrice(ctx, text.trim());
       break;
 
     case 'awaiting_withdraw_address':
@@ -58,16 +70,73 @@ async function handlePotentialTokenAddress(ctx: BotContext, text: string): Promi
   const addressRegex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
   if (addressRegex.test(text)) {
-    // Looks like a Solana address - could be a token
-    // TODO: Implement token lookup and buy flow (Phase 2)
-    await ctx.reply(
-      '🔍 *Token Address Detected*\n\n' +
-      '🚧 _Trading functionality is coming soon!_\n\n' +
-      'Once implemented, you\'ll be able to buy this token directly.',
-      { parse_mode: 'Markdown' }
-    );
+    // Looks like a Solana address - show token info and buy options
+    await handleTokenInput(ctx, text);
   }
   // Otherwise ignore the message
+}
+
+/**
+ * Handle custom buy amount input.
+ */
+async function handleBuyAmount(ctx: BotContext, amountStr: string): Promise<void> {
+  ctx.session.state = undefined;
+
+  const amount = parseFloat(amountStr);
+  if (isNaN(amount) || amount <= 0 || amount > 100) {
+    await ctx.reply('❌ Invalid amount. Please enter a number between 0.01 and 100 SOL.');
+    return;
+  }
+
+  const tokenAddress = ctx.session.tradeToken?.address;
+  if (!tokenAddress) {
+    await ctx.reply('❌ Session expired. Please paste the token address again.');
+    return;
+  }
+
+  await handleBuy(ctx, String(amount), tokenAddress);
+}
+
+/**
+ * Handle stop loss price input.
+ */
+async function handleSlPrice(ctx: BotContext, priceStr: string): Promise<void> {
+  ctx.session.state = undefined;
+
+  const price = parseFloat(priceStr);
+  if (isNaN(price) || price <= 0) {
+    await ctx.reply('❌ Invalid price. Please enter a positive number.');
+    return;
+  }
+
+  const tokenAddress = ctx.session.tradeToken?.address;
+  if (!tokenAddress) {
+    await ctx.reply('❌ Session expired. Please try again.');
+    return;
+  }
+
+  await createStopLoss(ctx, tokenAddress, price);
+}
+
+/**
+ * Handle take profit price input.
+ */
+async function handleTpPrice(ctx: BotContext, priceStr: string): Promise<void> {
+  ctx.session.state = undefined;
+
+  const price = parseFloat(priceStr);
+  if (isNaN(price) || price <= 0) {
+    await ctx.reply('❌ Invalid price. Please enter a positive number.');
+    return;
+  }
+
+  const tokenAddress = ctx.session.tradeToken?.address;
+  if (!tokenAddress) {
+    await ctx.reply('❌ Session expired. Please try again.');
+    return;
+  }
+
+  await createTakeProfit(ctx, tokenAddress, price);
 }
 
 /**
@@ -95,7 +164,7 @@ async function handleWithdrawAddress(ctx: BotContext, address: string): Promise<
 /**
  * Handle withdraw amount input.
  */
-async function handleWithdrawAmount(ctx: BotContext, amount: string): Promise<void> {
+async function handleWithdrawAmount(ctx: BotContext, _amount: string): Promise<void> {
   ctx.session.state = undefined;
 
   // TODO: Implement actual withdrawal (Phase 2)

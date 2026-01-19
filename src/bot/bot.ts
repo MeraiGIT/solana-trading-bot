@@ -6,15 +6,37 @@ import { Bot, Context, session, SessionFlavor } from 'grammy';
 import { appConfig } from '../utils/env.js';
 
 /**
+ * Trade token data stored in session.
+ */
+interface TradeToken {
+  address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  priceUsd: number;
+}
+
+/**
  * Session data structure.
  */
 interface SessionData {
   // Current state for multi-step operations
-  state?: 'awaiting_token' | 'awaiting_amount' | 'awaiting_private_key' | 'awaiting_withdraw_address' | 'awaiting_withdraw_amount';
+  state?:
+    | 'awaiting_token'
+    | 'awaiting_amount'
+    | 'awaiting_private_key'
+    | 'awaiting_withdraw_address'
+    | 'awaiting_withdraw_amount'
+    | 'awaiting_buy_amount'
+    | 'awaiting_sl_price'
+    | 'awaiting_tp_price';
 
   // Temporary data for operations
   pendingToken?: string;
   pendingAmount?: number;
+
+  // Trade operation data
+  tradeToken?: TradeToken;
 }
 
 /**

@@ -4,10 +4,11 @@
  * A custodial Solana trading bot with direct DEX integration.
  */
 
-import { createBot, BotContext } from './bot/bot.js';
+import { createBot } from './bot/bot.js';
 import { handleStart } from './bot/commands/start.js';
 import { handleCallback } from './bot/handlers/callback.js';
 import { handleMessage } from './bot/handlers/message.js';
+import { showPositions, showOrders, showTradeMenu } from './bot/commands/trade.js';
 
 console.log('='.repeat(50));
 console.log('  Solana Trading Bot');
@@ -26,6 +27,9 @@ bot.command('wallet', async (ctx) => {
   const { showWalletMenu } = await import('./bot/commands/wallet.js');
   await showWalletMenu(ctx);
 });
+bot.command('trade', showTradeMenu);
+bot.command('positions', showPositions);
+bot.command('orders', showOrders);
 
 // Register callback query handler
 bot.on('callback_query:data', handleCallback);

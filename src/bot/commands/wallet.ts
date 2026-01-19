@@ -2,7 +2,7 @@
  * Wallet command handlers.
  */
 
-import { BotContext, getUserId, sendError, sendSuccess } from '../bot.js';
+import { BotContext, getUserId, sendError } from '../bot.js';
 import {
   walletMenuKeyboard,
   confirmCreateWalletKeyboard,

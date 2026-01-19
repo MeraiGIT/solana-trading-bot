@@ -3,7 +3,7 @@
  */
 
 import { BotContext, getUserId } from '../bot.js';
-import { mainMenuKeyboard, walletMenuKeyboard, confirmCreateWalletKeyboard } from '../keyboards/menus.js';
+import { mainMenuKeyboard, walletMenuKeyboard } from '../keyboards/menus.js';
 import { db } from '../../services/database.js';
 
 /**

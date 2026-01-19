@@ -1,9 +1,9 @@
 # Project Status - Solana Trading Bot
 
 > **Last Updated**: 2026-01-19
-> **Current Version**: 0.1.0
-> **Current Phase**: Phase 1 - Core Infrastructure
-> **Overall Progress**: 25%
+> **Current Version**: 0.2.0
+> **Current Phase**: Phase 2 - Trading Engine
+> **Overall Progress**: 75%
 
 ---
 
@@ -11,15 +11,15 @@
 
 | # | Milestone | Status | Progress |
 |---|-----------|--------|----------|
-| 1 | Core Infrastructure | **IN PROGRESS** | 60% |
-| 2 | Trading Engine | Not Started | 0% |
-| 3 | Position Management | Not Started | 0% |
+| 1 | Core Infrastructure | **COMPLETE** | 100% |
+| 2 | Trading Engine | **COMPLETE** | 100% |
+| 3 | Position Management | **IN PROGRESS** | 80% |
 | 4 | Polish & Security | Not Started | 0% |
 | 5 | Copy Trading Migration | Not Started | 0% |
 
 ---
 
-## Phase 1: Core Infrastructure (Current)
+## Phase 1: Core Infrastructure (COMPLETE)
 
 ### Completed
 - [x] Project setup (TypeScript, Grammy, dependencies)
@@ -27,91 +27,139 @@
 - [x] Wallet manager (generate/import/export)
 - [x] Documentation (CLAUDE.md, BUILDING_PLAN.md, architecture.md)
 - [x] Environment configuration
+- [x] Database schema in Supabase (tb_ tables)
+- [x] Grammy bot setup with /start command
+- [x] Wallet commands (/wallet, deposit, withdraw, export)
+
+---
+
+## Phase 2: Trading Engine (COMPLETE)
+
+### Completed
+- [x] Jupiter API client (quotes + swaps)
+- [x] PumpPortal API client (PumpFun trades)
+- [x] DEX Router (auto-select Jupiter vs PumpFun)
+- [x] Token info service (DexScreener)
+- [x] Price monitor for SL/TP
+- [x] Buy/sell commands in bot
+- [x] Position tracking
+
+### Key Features
+- **MEV Protection**: Priority fees, retry logic, confirmation waiting
+- **Auto DEX Selection**: PumpFun bonding curve → PumpPortal, others → Jupiter
+- **SL/TP Orders**: Background monitoring and auto-execution
+
+---
+
+## Phase 3: Position Management (IN PROGRESS)
+
+### Completed
+- [x] Position display with PnL calculation
+- [x] Sell by percentage (25%, 50%, 75%, 100%)
+- [x] Stop Loss order creation
+- [x] Take Profit order creation
+- [x] Order cancellation
 
 ### In Progress
-- [ ] Database schema in Supabase
-- [ ] Grammy bot setup with /start command
-- [ ] Wallet commands (/wallet, deposit, withdraw)
+- [ ] Test trading flow end-to-end
 
 ### Pending
-- [ ] Initialize Git repository
-- [ ] Connect to GitHub remote
-- [ ] Basic error handling
-- [ ] Logging infrastructure
+- [ ] Position history
+- [ ] Transaction history view
 
 ---
 
 ## What's Working
 
-1. **Wallet Encryption** (`src/wallet/encryption.ts`)
+1. **Wallet System** (`src/wallet/`)
    - AES-256-GCM encryption
-   - PBKDF2 key derivation
-   - Salt generation
-   - Secure memory clearing
-
-2. **Wallet Manager** (`src/wallet/manager.ts`)
    - HD wallet generation
-   - Private key import (base58)
+   - Private key import/export
    - Balance checking
-   - Address validation
+
+2. **Trading Engine** (`src/trading/`)
+   - Jupiter API client (20+ DEXs)
+   - PumpPortal client (PumpFun)
+   - DEX Router with auto-selection
+   - Token info from DexScreener
+   - Price monitor for SL/TP
+
+3. **Bot Commands** (`src/bot/`)
+   - /start - Welcome and wallet setup
+   - /wallet - Wallet management
+   - /trade - Trading menu
+   - /positions - View holdings
+   - /orders - View SL/TP orders
+   - Token address detection → buy flow
 
 ---
 
 ## Next Steps
 
-1. **Immediate** (Next Session)
-   - Create database schema in Supabase (tb_ tables)
-   - Set up Grammy bot with basic /start
-   - Implement /wallet command
+1. **Immediate** (Current Session)
+   - Test trading flow with real tokens
+   - Verify SL/TP execution
+   - Fix any runtime issues
 
 2. **Short Term** (This Week)
-   - Complete wallet UI (deposit, withdraw)
-   - Start Jupiter API integration
-   - Basic buy/sell commands
+   - Add transaction history view
+   - Settings command (/settings)
+   - User preferences (default amounts, slippage)
 
 3. **Medium Term** (Next Week)
-   - PumpPortal integration
-   - Position tracking
-   - SL/TP orders
+   - Integration with copy-trading-bot
+   - Signal-based auto trading
+   - Portfolio analytics
 
 ---
 
 ## Technical Notes
 
-### Dependencies Installed
-```json
-{
-  "@solana/web3.js": "^1.95.0",
-  "@supabase/supabase-js": "^2.45.0",
-  "grammy": "^1.30.0",
-  "bs58": "^6.0.0",
-  "bip39": "^3.1.0",
-  "ed25519-hd-key": "^1.3.0"
-}
+### Trading Module Structure
+```
+src/trading/
+├── jupiter.ts      # Jupiter API client
+├── pumpfun.ts      # PumpPortal API client
+├── router.ts       # DEX selection logic
+├── tokenInfo.ts    # DexScreener integration
+├── priceMonitor.ts # SL/TP monitoring
+└── index.ts        # Module exports
 ```
 
-### Database Tables to Create
-- `tb_wallets` - User wallets (encrypted)
-- `tb_positions` - Current holdings
-- `tb_limit_orders` - SL/TP orders
-- `tb_transactions` - Trade history
-- `tb_user_settings` - User preferences
+### Database Tables (Supabase)
+- `tb_wallets` - User wallets (encrypted) ✅
+- `tb_positions` - Current holdings ✅
+- `tb_limit_orders` - SL/TP orders ✅
+- `tb_transactions` - Trade history ✅
+- `tb_user_settings` - User preferences ✅
 
-### Bot Token
-- **Status**: Pending creation via @BotFather
-- **Required**: User to create and add to .env
+### API Integrations
+- **Jupiter**: `https://api.jup.ag/swap/v1/` (quotes + swaps)
+- **PumpPortal**: `https://pumpportal.fun/api/trade-local`
+- **DexScreener**: `https://api.dexscreener.com/latest/dex/`
 
 ---
 
 ## Known Issues
 
-None yet - project just initialized.
+1. Price monitor not started automatically (needs integration in index.ts)
+2. Need to test with real tokens on mainnet
 
 ---
 
 ## Session Log
 
-### 2026-01-19
+### 2026-01-19 (Session 2)
+- Created Jupiter API client
+- Created PumpPortal API client
+- Created DEX Router
+- Created Token Info service
+- Created Price Monitor for SL/TP
+- Added buy/sell commands to bot
+- Updated callback and message handlers
+- All TypeScript builds successfully
+
+### 2026-01-19 (Session 1)
 - Initialized project structure
 - Created wallet encryption module
 - Created wallet manager

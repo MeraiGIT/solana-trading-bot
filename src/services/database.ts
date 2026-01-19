@@ -180,7 +180,7 @@ export class Database {
    * Create or update a position.
    */
   async upsertPosition(position: Omit<Position, 'id' | 'createdAt' | 'updatedAt'>): Promise<string | null> {
-    const { data, error } = await this.client
+    const { data } = await this.client
       .from('tb_positions')
       .upsert({
         user_id: position.userId,
@@ -254,7 +254,7 @@ export class Database {
    * Create a limit order.
    */
   async createLimitOrder(order: Omit<LimitOrder, 'id' | 'createdAt'>): Promise<string | null> {
-    const { data, error } = await this.client
+    const { data } = await this.client
       .from('tb_limit_orders')
       .insert({
         user_id: order.userId,
@@ -303,7 +303,7 @@ export class Database {
    * Create a transaction record.
    */
   async createTransaction(tx: Omit<Transaction, 'id' | 'createdAt'>): Promise<string | null> {
-    const { data, error } = await this.client
+    const { data } = await this.client
       .from('tb_transactions')
       .insert({
         user_id: tx.userId,

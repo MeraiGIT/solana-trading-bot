@@ -16,12 +16,25 @@ import {
   exportPrivateKey,
   showWithdrawPrompt,
 } from '../commands/wallet.js';
+import {
+  showTradeMenu,
+  handleTokenInput,
+  handleBuy,
+  showPositions,
+  showSellOptions,
+  handleSell,
+  showStopLossPrompt,
+  showTakeProfitPrompt,
+  showOrders,
+  cancelOrder,
+} from '../commands/trade.js';
 
 /**
  * Register callback handlers on the bot.
+ * Note: Handlers are registered directly in index.ts
  */
-export function registerCallbackHandlers(bot: BotContext['api']['config']['botInfo']['constructor']['prototype']['api']['config']['botInfo']['constructor']['prototype']['api']['raw']['constructor']['prototype']['api']['raw']['sendMessage']): void {
-  // This is a placeholder - handlers are registered in index.ts
+export function registerCallbackHandlers(): void {
+  // Placeholder - handlers are registered in index.ts
 }
 
 /**
@@ -102,30 +115,76 @@ export async function handleCallback(ctx: BotContext): Promise<void> {
       return;
     }
 
-    // Trade actions (placeholder for Phase 2)
+    // Trade menu
     if (data === 'menu:trade') {
-      await ctx.editMessageText(
-        '📈 *Trading*\n\n_Coming soon! Trading functionality is being developed._',
-        { parse_mode: 'Markdown' }
-      );
+      await showTradeMenu(ctx);
       return;
     }
 
-    // Positions (placeholder for Phase 3)
-    if (data === 'menu:positions') {
-      await ctx.editMessageText(
-        '📊 *Positions*\n\n_Coming soon! Position tracking is being developed._',
-        { parse_mode: 'Markdown' }
-      );
+    // Positions
+    if (data === 'menu:positions' || data === 'trade:positions') {
+      await showPositions(ctx);
       return;
     }
 
-    // Orders (placeholder for Phase 3)
-    if (data === 'menu:orders') {
-      await ctx.editMessageText(
-        '📋 *Orders*\n\n_Coming soon! Order management is being developed._',
-        { parse_mode: 'Markdown' }
-      );
+    // Orders
+    if (data === 'menu:orders' || data === 'trade:orders') {
+      await showOrders(ctx);
+      return;
+    }
+
+    // Token lookup (refresh)
+    if (data.startsWith('token:')) {
+      const tokenAddress = data.replace('token:', '');
+      await handleTokenInput(ctx, tokenAddress);
+      return;
+    }
+
+    // Buy actions
+    if (data.startsWith('buy:')) {
+      const parts = data.split(':');
+      if (parts.length === 3) {
+        const amount = parts[1];
+        const tokenAddress = parts[2];
+        await handleBuy(ctx, amount, tokenAddress);
+      }
+      return;
+    }
+
+    // Sell menu (show options for a position)
+    if (data.startsWith('sell:') && data.split(':').length === 2) {
+      const tokenAddress = data.replace('sell:', '');
+      await showSellOptions(ctx, tokenAddress);
+      return;
+    }
+
+    // Sell action with percentage
+    if (data.startsWith('sell:') && data.split(':').length === 3) {
+      const parts = data.split(':');
+      const percentage = parseInt(parts[1], 10);
+      const tokenAddress = parts[2];
+      await handleSell(ctx, percentage, tokenAddress);
+      return;
+    }
+
+    // Stop Loss prompt
+    if (data.startsWith('sl:')) {
+      const tokenAddress = data.replace('sl:', '');
+      await showStopLossPrompt(ctx, tokenAddress);
+      return;
+    }
+
+    // Take Profit prompt
+    if (data.startsWith('tp:')) {
+      const tokenAddress = data.replace('tp:', '');
+      await showTakeProfitPrompt(ctx, tokenAddress);
+      return;
+    }
+
+    // Cancel order
+    if (data.startsWith('cancel_order:')) {
+      const orderId = data.replace('cancel_order:', '');
+      await cancelOrder(ctx, orderId);
       return;
     }
 

@@ -96,23 +96,32 @@ Private Key → PBKDF2(master_key + salt + user_id) → AES-256-GCM → Database
 
 ### 3. Trading Engine (`src/trading/`)
 
-**Purpose**: Execute trades on Solana DEXs
+**Purpose**: Execute trades on Solana DEXs with MEV protection
 
 | Component | File | Description |
 |-----------|------|-------------|
-| Router | `router.ts` | Selects Jupiter or PumpPortal |
-| Jupiter | `jupiter.ts` | Jupiter API client |
+| Router | `router.ts` | Auto-selects Jupiter or PumpPortal |
+| Jupiter | `jupiter.ts` | Jupiter API v1 client |
 | PumpPortal | `pumpfun.ts` | PumpPortal API client |
-| Executor | `executor.ts` | TX signing and sending |
+| TokenInfo | `tokenInfo.ts` | DexScreener price/info service |
+| PriceMonitor | `priceMonitor.ts` | SL/TP background monitoring |
 
 **DEX Selection Logic**:
 ```typescript
-if (isPumpFunToken(tokenAddress)) {
-  return pumpPortal.swap(params);
-} else {
-  return jupiter.swap(params);
+async selectDex(tokenMint: string): Promise<'jupiter' | 'pumpfun'> {
+  const info = await this.tokenInfo.getTokenInfo(tokenMint);
+  if (info?.isPumpFun && info.onBondingCurve) {
+    return 'pumpfun';  // Use PumpPortal for bonding curve
+  }
+  return 'jupiter';    // Jupiter for everything else
 }
 ```
+
+**MEV Protection Features**:
+- Priority fees (100,000+ lamports)
+- Retry with exponential backoff
+- Transaction confirmation waiting
+- Auto pool selection (PumpPortal)
 
 ### 4. Price Monitor (`src/trading/priceMonitor.ts`)
 
@@ -185,9 +194,10 @@ tb_user_settings
 ## External APIs
 
 ### Jupiter API
-- **Base URL**: `https://quote-api.jup.ag/v6/`
+- **Base URL**: `https://api.jup.ag/swap/v1/`
 - **Endpoints**: `/quote`, `/swap`
 - **Purpose**: Get quotes and execute swaps across 20+ DEXs
+- **Features**: Dynamic slippage, compute budget, shared accounts
 
 ### PumpPortal API
 - **Base URL**: `https://pumpportal.fun/api/`
