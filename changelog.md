@@ -43,6 +43,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Documentation
 - Added clarifying comment in tokenInfo.ts about DexScreener not providing decimals
 
+## [0.3.3] - 2026-01-20
+
+### Fixed
+- **Critical: PumpFun Token Decimals** (`src/trading/tokenInfo.ts`)
+  - PumpFun tokens now correctly detected and use 6 decimals (not 9)
+  - Token addresses ending with "pump" are auto-detected as PumpFun
+  - USDC/USDT also correctly use 6 decimals
+  - Previously: 0.013 SOL buy showed "0.05 tokens" (wrong)
+  - Now: 0.013 SOL buy shows "55.06 tokens" (correct)
+
+- **Telegram Markdown Parsing Errors** (`src/bot/commands/trade.ts`)
+  - Added `escapeMarkdown()` utility function
+  - Token symbols escaped in positions/sell messages
+  - Error messages escaped to prevent Telegram "can't parse entities" errors
+
+### Tested End-to-End
+- Buy 0.013 SOL → Received 55.06 WhiteWhale tokens ✅
+- Sell 25% (13.76 tokens) → Received 0.0030 SOL ✅
+- Sell 100% (41.29 tokens) → Received 0.0089 SOL ✅
+- Position correctly cleared after full sell ✅
+- Transaction history shows all trades ✅
+
 ---
 
 ## [0.3.1] - 2026-01-20
