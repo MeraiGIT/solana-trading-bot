@@ -32,6 +32,9 @@ const walletManager = new WalletManager(
 const priceMonitor = new PriceMonitor(db, walletManager, {
   checkIntervalMs: 30000, // Check every 30 seconds
   rpcUrl: appConfig.solanaRpcUrl,
+  jupiterApiKey: appConfig.jupiterApiKey,
+  heliusApiKey: appConfig.heliusApiKey,
+  useJito: appConfig.useJito,
   onOrderTriggered: async (order: LimitOrder, result: TriggerResult) => {
     // Send notification to user
     try {

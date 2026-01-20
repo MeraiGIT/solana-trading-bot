@@ -27,6 +27,9 @@ export interface LimitOrder {
 export interface MonitorConfig {
   checkIntervalMs: number; // How often to check prices
   rpcUrl: string;
+  jupiterApiKey?: string; // Required for Jupiter API
+  heliusApiKey?: string;  // For priority fees
+  useJito?: boolean;      // MEV protection
   onOrderTriggered?: (order: LimitOrder, result: TriggerResult) => void;
   onError?: (error: Error) => void;
 }
@@ -63,6 +66,9 @@ export class PriceMonitor {
       rpcUrl: config.rpcUrl,
       defaultSlippageBps: 1000, // 10% slippage for SL/TP (fast execution)
       defaultPriorityFee: 200000, // Higher priority for SL/TP
+      jupiterApiKey: config.jupiterApiKey,
+      heliusApiKey: config.heliusApiKey,
+      useJito: config.useJito,
     });
     this.tokenInfo = new TokenInfoService();
   }
