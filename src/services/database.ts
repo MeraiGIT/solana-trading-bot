@@ -205,13 +205,28 @@ export class Database {
    * Create or update a position.
    */
   async upsertPosition(position: Omit<Position, 'id' | 'createdAt' | 'updatedAt'>): Promise<string | null> {
+    // Validate tokenDecimals (must be 0-18 for valid tokens)
+    const decimals = position.tokenDecimals;
+    if (decimals === undefined || decimals === null || decimals < 0 || decimals > 18 || !Number.isInteger(decimals)) {
+      console.warn(`Invalid tokenDecimals: ${decimals}, defaulting to 9`);
+    }
+    const validDecimals = (decimals !== undefined && decimals !== null && decimals >= 0 && decimals <= 18 && Number.isInteger(decimals))
+      ? decimals
+      : 9;
+
+    // Validate amount is a positive finite number
+    if (!Number.isFinite(position.amount) || position.amount < 0) {
+      console.error(`Invalid position amount: ${position.amount}`);
+      return null;
+    }
+
     const { data } = await this.client
       .from('tb_positions')
       .upsert({
         user_id: position.userId,
         token_address: position.tokenAddress,
         token_symbol: position.tokenSymbol,
-        token_decimals: position.tokenDecimals,
+        token_decimals: validDecimals,
         amount: position.amount,
         entry_price_usd: position.entryPriceUsd,
         entry_sol: position.entrySol,

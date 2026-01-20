@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.3.2] - 2026-01-20
+
+### Fixed
+- **Critical: Token Amount Calculation** (`src/bot/commands/trade.ts`)
+  - Fixed bug where token amounts displayed in millions instead of actual amount
+  - Jupiter returns raw amounts (with decimals), now properly divided by 10^decimals when storing positions
+  - Positions now show correct human-readable token amounts
+
+- **Jupiter API Authentication** (`src/trading/jupiter.ts`, `src/utils/env.ts`)
+  - Added `x-api-key` header support for Jupiter API (now required)
+  - Added `JUPITER_API_KEY` environment variable
+
+- **Sell Percentage Validation** (`src/bot/commands/trade.ts:628-632`)
+  - Added bounds checking for sell percentage (1-100)
+  - Prevents invalid sell operations with malformed percentages
+
+- **Balance Check Precision** (`src/bot/commands/trade.ts:297-318`)
+  - Changed balance comparison from floating-point to integer math (lamports)
+  - Prevents floating-point precision errors in balance checks
+
+- **Error Object Serialization** (`src/trading/jupiter.ts:298-301`)
+  - Fixed `simulationError` object being shown as "[object Object]"
+  - Now properly serializes error objects to JSON strings
+
+- **Position Decimal Validation** (`src/services/database.ts:207-221`)
+  - Added validation for tokenDecimals (0-18 range)
+  - Added validation for position amount (must be positive finite number)
+  - Invalid decimals default to 9 with warning log
+
+### Added
+- **Telegram Command Menu** (`src/index.ts`)
+  - Added `bot.api.setMyCommands()` for "/" command suggestions
+  - Users now see available commands in Telegram's command menu
+
+### Documentation
+- Added clarifying comment in tokenInfo.ts about DexScreener not providing decimals
+
+---
+
 ## [0.3.1] - 2026-01-20
 
 ### Fixed

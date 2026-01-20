@@ -294,11 +294,16 @@ export async function handleBuy(
     return;
   }
 
-  // Step 2: Check balance
+  // Step 2: Check balance using lamports (integers) for accurate comparison
   let balance;
+  const FEE_RESERVE_LAMPORTS = 10_000_000; // 0.01 SOL reserved for fees
   try {
     balance = await walletManager.getBalance(wallet.publicAddress);
-    if (balance.sol < solAmount + 0.01) {
+    // Convert to lamports for integer comparison (avoids floating-point errors)
+    const balanceLamports = Math.floor(balance.sol * 1e9);
+    const requiredLamports = Math.floor(solAmount * 1e9) + FEE_RESERVE_LAMPORTS;
+
+    if (balanceLamports < requiredLamports) {
       await updateStatusMessage(
         ctx,
         statusMsgId,
@@ -624,6 +629,12 @@ export async function handleSell(
   tokenAddress: string
 ): Promise<void> {
   const userId = getUserId(ctx);
+
+  // Validate percentage bounds (0-100)
+  if (percentage <= 0 || percentage > 100 || !Number.isFinite(percentage)) {
+    await sendError(ctx, 'Invalid sell percentage. Must be between 1 and 100.');
+    return;
+  }
 
   // Get wallet and position
   const wallet = await db.getWallet(userId);

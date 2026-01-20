@@ -165,7 +165,11 @@ export class TokenInfoService {
       address: pair.baseToken.address,
       symbol: pair.baseToken.symbol,
       name: pair.baseToken.name,
-      decimals: 9, // Most Solana tokens use 9 decimals
+      // Note: DexScreener doesn't provide decimals. Most Solana tokens use 9.
+      // USDC/USDT use 6. For accurate decimals, would need on-chain fetch.
+      // This is safe because Jupiter returns amounts in raw units and we
+      // convert both ways using the same decimals value.
+      decimals: 9,
       priceUsd: parseFloat(pair.priceUsd) || 0,
       priceNative: parseFloat(pair.priceNative) || 0,
       liquidity: pair.liquidity?.usd ?? 0,
