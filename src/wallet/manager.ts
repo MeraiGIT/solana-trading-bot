@@ -8,7 +8,15 @@
  * - Secure storage with AES-256-GCM encryption
  */
 
-import { Keypair, PublicKey, Connection, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import {
+  Keypair,
+  PublicKey,
+  Connection,
+  LAMPORTS_PER_SOL,
+  Transaction,
+  SystemProgram,
+  sendAndConfirmTransaction,
+} from '@solana/web3.js';
 import * as bip39 from 'bip39';
 import { derivePath } from 'ed25519-hd-key';
 import bs58 from 'bs58';
@@ -334,6 +342,87 @@ export class WalletManager {
       return decoded.length === 64;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Withdraw SOL to an external address.
+   *
+   * @param walletData - User's encrypted wallet data
+   * @param destinationAddress - Address to send SOL to
+   * @param amountSol - Amount in SOL to send
+   * @returns Transaction signature or throws error
+   */
+  async withdrawSol(
+    walletData: WalletData,
+    destinationAddress: string,
+    amountSol: number
+  ): Promise<{ signature: string; fee: number }> {
+    // Get keypair for signing
+    const keypair = this.getKeypair(walletData);
+
+    try {
+      const destination = new PublicKey(destinationAddress);
+      const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+
+      // Get current balance to check if enough
+      const balance = await this.connection.getBalance(keypair.publicKey);
+
+      // Estimate fee (typically ~5000 lamports for simple transfer)
+      const estimatedFee = 5000;
+
+      if (balance < lamports + estimatedFee) {
+        throw new Error(`Insufficient balance. Available: ${(balance / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
+      }
+
+      // Create transfer transaction
+      const transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: keypair.publicKey,
+          toPubkey: destination,
+          lamports,
+        })
+      );
+
+      // Get recent blockhash
+      const { blockhash } = await this.connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = keypair.publicKey;
+
+      // Sign and send
+      const signature = await sendAndConfirmTransaction(
+        this.connection,
+        transaction,
+        [keypair],
+        {
+          commitment: 'confirmed',
+        }
+      );
+
+      // Clear keypair from memory
+      secureZero(keypair.secretKey);
+
+      return {
+        signature,
+        fee: estimatedFee / LAMPORTS_PER_SOL,
+      };
+    } catch (error) {
+      // Clear keypair from memory even on error
+      secureZero(keypair.secretKey);
+      throw error;
+    }
+  }
+
+  /**
+   * Get estimated network fee for a SOL transfer.
+   */
+  async getTransferFee(): Promise<number> {
+    try {
+      const { feeCalculator } = await this.connection.getRecentBlockhash();
+      // Estimate for a simple transfer (1 signature)
+      return (feeCalculator?.lamportsPerSignature || 5000) / LAMPORTS_PER_SOL;
+    } catch {
+      return 0.000005; // Default fallback
     }
   }
 }

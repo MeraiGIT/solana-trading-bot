@@ -12,6 +12,8 @@ import {
 import { db } from '../../services/database.js';
 import { WalletManager } from '../../wallet/manager.js';
 import { appConfig } from '../../utils/env.js';
+import QRCode from 'qrcode';
+import { InputFile } from 'grammy';
 
 // Create wallet manager instance
 const walletManager = new WalletManager(
@@ -259,7 +261,7 @@ Your wallet has been imported and encrypted securely.
 }
 
 /**
- * Show deposit address.
+ * Show deposit address with QR code.
  */
 export async function showDepositAddress(ctx: BotContext): Promise<void> {
   const userId = getUserId(ctx);
@@ -283,15 +285,44 @@ _Tap the address to copy_
   `.trim();
 
   try {
-    await ctx.editMessageText(message, {
-      parse_mode: 'Markdown',
-      reply_markup: backToMainKeyboard(),
+    // Generate QR code as buffer
+    const qrBuffer = await QRCode.toBuffer(wallet.publicAddress, {
+      type: 'png',
+      width: 300,
+      margin: 2,
+      color: {
+        dark: '#000000',
+        light: '#FFFFFF',
+      },
     });
-  } catch {
-    await ctx.reply(message, {
+
+    // Delete previous message if it was a callback
+    try {
+      await ctx.deleteMessage();
+    } catch {
+      // Ignore
+    }
+
+    // Send QR code image with caption
+    await ctx.replyWithPhoto(new InputFile(qrBuffer, 'deposit-qr.png'), {
+      caption: message,
       parse_mode: 'Markdown',
-      reply_markup: backToMainKeyboard(),
+      reply_markup: walletMenuKeyboard(true),
     });
+  } catch (error) {
+    console.error('Error generating QR code:', error);
+    // Fallback to text-only if QR fails
+    try {
+      await ctx.editMessageText(message, {
+        parse_mode: 'Markdown',
+        reply_markup: backToMainKeyboard(),
+      });
+    } catch {
+      await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_markup: backToMainKeyboard(),
+      });
+    }
   }
 }
 

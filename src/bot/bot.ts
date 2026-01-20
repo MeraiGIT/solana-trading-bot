@@ -27,9 +27,11 @@ interface SessionData {
     | 'awaiting_private_key'
     | 'awaiting_withdraw_address'
     | 'awaiting_withdraw_amount'
+    | 'awaiting_withdraw_confirm'
     | 'awaiting_buy_amount'
     | 'awaiting_sl_price'
-    | 'awaiting_tp_price';
+    | 'awaiting_tp_price'
+    | 'awaiting_setting_value';
 
   // Temporary data for operations
   pendingToken?: string;
@@ -37,6 +39,13 @@ interface SessionData {
 
   // Trade operation data
   tradeToken?: TradeToken;
+
+  // Withdraw operation data
+  withdrawAddress?: string;
+  withdrawAmount?: number;
+
+  // Settings operation data
+  pendingSetting?: 'buy_amount' | 'slippage' | 'auto_sl' | 'auto_tp' | 'daily_limit' | 'large_withdraw';
 }
 
 /**

@@ -29,7 +29,27 @@ import {
   showTakeProfitPrompt,
   showOrders,
   cancelOrder,
+  showHistory,
 } from '../commands/trade.js';
+import {
+  showSettingsMenu,
+  showBuyAmountSettings,
+  setBuyAmount,
+  showCustomBuyPrompt,
+  showSlippageSettings,
+  setSlippage,
+  showAutoSlSettings,
+  setAutoSl,
+  showAutoTpSettings,
+  setAutoTp,
+  showWithdrawLimitSettings,
+  showDailyLimitSettings,
+  setDailyLimit,
+  showCustomDailyLimitPrompt,
+  showLargeWithdrawSettings,
+  setLargeWithdrawThreshold,
+  showCustomLargeWithdrawPrompt,
+} from '../commands/settings.js';
 
 /**
  * Register callback handlers on the bot.
@@ -200,12 +220,112 @@ export async function handleCallback(ctx: BotContext): Promise<void> {
       return;
     }
 
-    // Settings (placeholder)
+    // Transaction history
+    if (data === 'menu:history') {
+      await showHistory(ctx, 1);
+      return;
+    }
+
+    if (data.startsWith('history:')) {
+      const page = parseInt(data.replace('history:', ''), 10);
+      await showHistory(ctx, page);
+      return;
+    }
+
+    // Settings menu
     if (data === 'menu:settings') {
-      await ctx.editMessageText(
-        '⚙️ *Settings*\n\n_Coming soon! Settings are being developed._',
-        { parse_mode: 'Markdown' }
-      );
+      await showSettingsMenu(ctx);
+      return;
+    }
+
+    // Settings: Buy amount
+    if (data === 'settings:buy_amount') {
+      await showBuyAmountSettings(ctx);
+      return;
+    }
+
+    if (data.startsWith('settings:set_buy:')) {
+      const amount = parseFloat(data.replace('settings:set_buy:', ''));
+      await setBuyAmount(ctx, amount);
+      return;
+    }
+
+    if (data === 'settings:custom_buy') {
+      await showCustomBuyPrompt(ctx);
+      return;
+    }
+
+    // Settings: Slippage
+    if (data === 'settings:slippage') {
+      await showSlippageSettings(ctx);
+      return;
+    }
+
+    if (data.startsWith('settings:slippage:')) {
+      const slippage = parseInt(data.replace('settings:slippage:', ''), 10);
+      await setSlippage(ctx, slippage);
+      return;
+    }
+
+    // Settings: Auto SL
+    if (data === 'settings:auto_sl') {
+      await showAutoSlSettings(ctx);
+      return;
+    }
+
+    if (data.startsWith('settings:set_auto_sl:')) {
+      const percent = parseInt(data.replace('settings:set_auto_sl:', ''), 10);
+      await setAutoSl(ctx, percent);
+      return;
+    }
+
+    // Settings: Auto TP
+    if (data === 'settings:auto_tp') {
+      await showAutoTpSettings(ctx);
+      return;
+    }
+
+    if (data.startsWith('settings:set_auto_tp:')) {
+      const percent = parseInt(data.replace('settings:set_auto_tp:', ''), 10);
+      await setAutoTp(ctx, percent);
+      return;
+    }
+
+    // Settings: Withdrawal limits
+    if (data === 'settings:withdraw_limits') {
+      await showWithdrawLimitSettings(ctx);
+      return;
+    }
+
+    if (data === 'settings:daily_limit') {
+      await showDailyLimitSettings(ctx);
+      return;
+    }
+
+    if (data.startsWith('settings:set_daily_limit:')) {
+      const limit = parseFloat(data.replace('settings:set_daily_limit:', ''));
+      await setDailyLimit(ctx, limit);
+      return;
+    }
+
+    if (data === 'settings:custom_daily_limit') {
+      await showCustomDailyLimitPrompt(ctx);
+      return;
+    }
+
+    if (data === 'settings:large_withdraw') {
+      await showLargeWithdrawSettings(ctx);
+      return;
+    }
+
+    if (data.startsWith('settings:set_large_withdraw:')) {
+      const threshold = parseFloat(data.replace('settings:set_large_withdraw:', ''));
+      await setLargeWithdrawThreshold(ctx, threshold);
+      return;
+    }
+
+    if (data === 'settings:custom_large_withdraw') {
+      await showCustomLargeWithdrawPrompt(ctx);
       return;
     }
 

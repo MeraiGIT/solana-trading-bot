@@ -875,3 +875,119 @@ export async function cancelOrder(ctx: BotContext, orderId: string): Promise<voi
     await ctx.answerCallbackQuery({ text: '❌ Failed to cancel order' });
   }
 }
+
+/**
+ * Show transaction history.
+ */
+export async function showHistory(ctx: BotContext, page: number = 1): Promise<void> {
+  const userId = getUserId(ctx);
+  const limit = 10;
+  const offset = (page - 1) * limit;
+
+  // Get transactions
+  const allTransactions = await db.getTransactions(userId, 50); // Get more to calculate total pages
+  const totalTransactions = allTransactions.length;
+  const totalPages = Math.ceil(totalTransactions / limit);
+  const transactions = allTransactions.slice(offset, offset + limit);
+
+  if (transactions.length === 0) {
+    const message = `
+📜 *Transaction History*
+
+_No transactions yet._
+
+Start trading to see your history here!
+    `.trim();
+
+    try {
+      await ctx.editMessageText(message, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [[{ text: '◀️ Back', callback_data: 'menu:main' }]] },
+      });
+    } catch {
+      await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [[{ text: '◀️ Back', callback_data: 'menu:main' }]] },
+      });
+    }
+    return;
+  }
+
+  // Format transactions
+  let historyList = '';
+  for (const tx of transactions) {
+    const emoji = getTransactionEmoji(tx.type, tx.status);
+    const date = new Date(tx.createdAt).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    let details = '';
+    if (tx.type === 'buy' || tx.type === 'sell') {
+      const amount = tx.amountTokens ? formatNumber(tx.amountTokens) : '?';
+      const sol = tx.amountSol ? tx.amountSol.toFixed(4) : '?';
+      const symbol = tx.tokenSymbol || 'tokens';
+      details = tx.type === 'buy'
+        ? `${sol} SOL → ${amount} ${symbol}`
+        : `${amount} ${symbol} → ${sol} SOL`;
+    } else if (tx.type === 'withdraw' || tx.type === 'deposit') {
+      details = `${tx.amountSol?.toFixed(4) || '?'} SOL`;
+    }
+
+    const statusText = tx.status === 'failed' ? ' ❌' : '';
+    historyList += `${emoji} *${tx.type.toUpperCase()}*${statusText}\n`;
+    historyList += `   ${details}\n`;
+    historyList += `   _${date}_\n\n`;
+  }
+
+  const message = `
+📜 *Transaction History*
+_Page ${page} of ${totalPages}_
+
+${historyList}
+  `.trim();
+
+  // Build pagination keyboard
+  const navButtons: Array<{ text: string; callback_data: string }> = [];
+  if (page > 1) {
+    navButtons.push({ text: '◀️ Prev', callback_data: `history:${page - 1}` });
+  }
+  if (page < totalPages) {
+    navButtons.push({ text: 'Next ▶️', callback_data: `history:${page + 1}` });
+  }
+
+  const keyboard = {
+    inline_keyboard: [
+      navButtons.length > 0 ? navButtons : [],
+      [{ text: '◀️ Back', callback_data: 'menu:main' }],
+    ].filter(row => row.length > 0),
+  };
+
+  try {
+    await ctx.editMessageText(message, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard,
+    });
+  } catch {
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard,
+    });
+  }
+}
+
+/**
+ * Get emoji for transaction type.
+ */
+function getTransactionEmoji(type: string, status: string): string {
+  if (status === 'failed') return '❌';
+  switch (type) {
+    case 'buy': return '🟢';
+    case 'sell': return '🔴';
+    case 'deposit': return '📥';
+    case 'withdraw': return '📤';
+    default: return '📝';
+  }
+}

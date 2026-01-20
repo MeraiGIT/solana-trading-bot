@@ -15,6 +15,8 @@ export function mainMenuKeyboard(): InlineKeyboard {
     .text('📊 Positions', 'menu:positions')
     .text('📋 Orders', 'menu:orders')
     .row()
+    .text('📜 History', 'menu:history')
+    .row()
     .text('⚙️ Settings', 'menu:settings')
     .text('❓ Help', 'menu:help');
 }
@@ -174,6 +176,8 @@ export function settingsMenuKeyboard(): InlineKeyboard {
     .text('🛑 Auto Stop Loss', 'settings:auto_sl')
     .row()
     .text('🎯 Auto Take Profit', 'settings:auto_tp')
+    .row()
+    .text('🔐 Withdrawal Limits', 'settings:withdraw_limits')
     .row()
     .text('« Back', 'menu:main');
 }

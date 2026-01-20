@@ -8,15 +8,59 @@ import { createBot } from './bot/bot.js';
 import { handleStart } from './bot/commands/start.js';
 import { handleCallback } from './bot/handlers/callback.js';
 import { handleMessage } from './bot/handlers/message.js';
-import { showPositions, showOrders, showTradeMenu } from './bot/commands/trade.js';
+import { showPositions, showOrders, showTradeMenu, showHistory } from './bot/commands/trade.js';
+import { PriceMonitor, LimitOrder, TriggerResult } from './trading/priceMonitor.js';
+import { db } from './services/database.js';
+import { WalletManager } from './wallet/manager.js';
+import { appConfig } from './utils/env.js';
 
 console.log('='.repeat(50));
 console.log('  Solana Trading Bot');
-console.log('  Version: 0.1.0');
+console.log('  Version: 0.3.0');
 console.log('='.repeat(50));
 
 // Create bot instance
 const bot = createBot();
+
+// Create wallet manager for price monitor
+const walletManager = new WalletManager(
+  appConfig.masterEncryptionKey,
+  appConfig.solanaRpcUrl
+);
+
+// Create price monitor for SL/TP execution
+const priceMonitor = new PriceMonitor(db, walletManager, {
+  checkIntervalMs: 30000, // Check every 30 seconds
+  rpcUrl: appConfig.solanaRpcUrl,
+  onOrderTriggered: async (order: LimitOrder, result: TriggerResult) => {
+    // Send notification to user
+    try {
+      const emoji = order.orderType === 'stop_loss' ? '🛑' : '🎯';
+      const orderTypeName = order.orderType === 'stop_loss' ? 'Stop Loss' : 'Take Profit';
+
+      let message = `${emoji} *${orderTypeName} Triggered!*\n\n`;
+
+      if (result.success) {
+        message += `✅ Order executed successfully!\n\n`;
+        message += `*Sold:* ${parseFloat(result.soldAmount).toFixed(2)} tokens\n`;
+        message += `*Received:* ${parseFloat(result.receivedSol).toFixed(4)} SOL\n`;
+        if (result.signature) {
+          message += `\n[View on Solscan](https://solscan.io/tx/${result.signature})`;
+        }
+      } else {
+        message += `❌ Order execution failed\n\n`;
+        message += `Error: ${result.error || 'Unknown error'}`;
+      }
+
+      await bot.api.sendMessage(order.userId, message, { parse_mode: 'Markdown' });
+    } catch (error) {
+      console.error('Failed to send order notification:', error);
+    }
+  },
+  onError: (error: Error) => {
+    console.error('Price monitor error:', error.message);
+  },
+});
 
 // Register command handlers
 bot.command('start', handleStart);
@@ -30,6 +74,13 @@ bot.command('wallet', async (ctx) => {
 bot.command('trade', showTradeMenu);
 bot.command('positions', showPositions);
 bot.command('orders', showOrders);
+bot.command('settings', async (ctx) => {
+  const { showSettingsMenu } = await import('./bot/commands/settings.js');
+  await showSettingsMenu(ctx);
+});
+bot.command('history', async (ctx) => {
+  await showHistory(ctx);
+});
 
 // Register callback query handler
 bot.on('callback_query:data', handleCallback);
@@ -49,19 +100,26 @@ bot.start({
   onStart: (botInfo) => {
     console.log(`✅ Bot started: @${botInfo.username}`);
     console.log('');
+
+    // Start the price monitor for SL/TP execution
+    priceMonitor.start();
+    console.log('✅ Price monitor started (checking every 30s)');
+    console.log('');
     console.log('Bot is ready to receive messages!');
   },
 });
 
 // Graceful shutdown
 process.on('SIGINT', () => {
-  console.log('\\nShutting down...');
+  console.log('\nShutting down...');
+  priceMonitor.stop();
   bot.stop();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-  console.log('\\nShutting down...');
+  console.log('\nShutting down...');
+  priceMonitor.stop();
   bot.stop();
   process.exit(0);
 });
