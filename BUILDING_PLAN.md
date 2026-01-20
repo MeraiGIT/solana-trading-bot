@@ -364,40 +364,59 @@ solana-trading-bot/
 ### Phase 1: Core Infrastructure (Week 1)
 - [x] Project setup (TypeScript, Grammy, dependencies)
 - [x] Wallet encryption module (AES-256-GCM)
-- [x] Wallet manager (generate/import)
-- [ ] Database schema & Supabase setup
-- [ ] Basic bot with /start command
-- [ ] Wallet commands (/wallet, deposit, withdraw)
+- [x] Wallet manager (generate/import/export)
+- [x] Database schema & Supabase setup
+- [x] Basic bot with /start command
+- [x] Wallet commands (/wallet, deposit)
+- [ ] **Withdraw SOL functionality** ⚠️ NOT BUILT
 
 ### Phase 2: Trading Engine (Week 2)
-- [ ] Jupiter API integration (quotes, swaps)
-- [ ] PumpPortal API integration (PumpFun tokens)
-- [ ] DEX router (auto-select Jupiter vs PumpFun)
-- [ ] Transaction signing & execution
-- [ ] Buy/sell commands
-- [ ] Token info display
+- [x] Jupiter API integration (quotes, swaps)
+- [x] PumpPortal API integration (PumpFun tokens)
+- [x] DEX router (auto-select Jupiter vs PumpFun)
+- [x] Transaction signing & execution
+- [x] Buy/sell commands
+- [x] Token info display (DexScreener)
 
 ### Phase 3: Position Management (Week 3)
-- [ ] Position tracking after buys
-- [ ] Real-time P&L calculation
-- [ ] Price monitoring service
-- [ ] SL/TP order creation
-- [ ] SL/TP order execution
-- [ ] Transaction history
+- [x] Position tracking after buys
+- [x] Real-time P&L calculation
+- [x] Price monitoring service (created, but not auto-started)
+- [x] SL/TP order creation
+- [x] SL/TP order execution
+- [ ] **Transaction history VIEW** ⚠️ NOT BUILT (table exists)
 
 ### Phase 4: Polish & Security (Week 4)
-- [ ] Withdrawal confirmations
-- [ ] Rate limiting
-- [ ] Error handling & retry logic
-- [ ] MEV protection (private RPC)
-- [ ] Comprehensive testing
-- [ ] Documentation
+- [ ] **Withdrawal confirmations** ⚠️ NOT BUILT
+- [ ] **Rate limiting** ⚠️ NOT BUILT
+- [x] Error handling & retry logic (partial)
+- [x] MEV protection (Jito bundles + dynamic priority fees)
+- [ ] **Comprehensive testing** ⚠️ NOT BUILT
+- [x] Documentation (architecture.md, changelog.md, Project_status.md)
 
 ### Phase 5: Copy Trading Migration (Week 5)
 - [ ] Integrate with existing copy-trading-bot
 - [ ] Replace Trojan calls with our trading API
 - [ ] Signal detection → auto-trade flow
 - [ ] End-to-end testing
+
+---
+
+## ⚠️ MISSING FEATURES SUMMARY
+
+### Critical (Must Have)
+1. **Withdraw SOL** - Users cannot withdraw funds from their wallet
+2. **Price Monitor Auto-Start** - SL/TP won't trigger until manually started
+
+### Important (Should Have)
+3. **Settings Menu** - Shows "Coming soon"
+4. **Transaction History View** - No way to see past trades
+5. **Rate Limiting** - Protect against spam/abuse
+
+### Nice to Have
+6. **QR Code for Deposit** - Currently just shows text address
+7. **Withdrawal Limits/Delays** - Security feature for large withdrawals
+8. **Comprehensive Testing** - Unit and integration tests
 
 ---
 
