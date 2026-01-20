@@ -42,13 +42,6 @@ import {
   setAutoSl,
   showAutoTpSettings,
   setAutoTp,
-  showWithdrawLimitSettings,
-  showDailyLimitSettings,
-  setDailyLimit,
-  showCustomDailyLimitPrompt,
-  showLargeWithdrawSettings,
-  setLargeWithdrawThreshold,
-  showCustomLargeWithdrawPrompt,
 } from '../commands/settings.js';
 
 /**
@@ -288,44 +281,6 @@ export async function handleCallback(ctx: BotContext): Promise<void> {
     if (data.startsWith('settings:set_auto_tp:')) {
       const percent = parseInt(data.replace('settings:set_auto_tp:', ''), 10);
       await setAutoTp(ctx, percent);
-      return;
-    }
-
-    // Settings: Withdrawal limits
-    if (data === 'settings:withdraw_limits') {
-      await showWithdrawLimitSettings(ctx);
-      return;
-    }
-
-    if (data === 'settings:daily_limit') {
-      await showDailyLimitSettings(ctx);
-      return;
-    }
-
-    if (data.startsWith('settings:set_daily_limit:')) {
-      const limit = parseFloat(data.replace('settings:set_daily_limit:', ''));
-      await setDailyLimit(ctx, limit);
-      return;
-    }
-
-    if (data === 'settings:custom_daily_limit') {
-      await showCustomDailyLimitPrompt(ctx);
-      return;
-    }
-
-    if (data === 'settings:large_withdraw') {
-      await showLargeWithdrawSettings(ctx);
-      return;
-    }
-
-    if (data.startsWith('settings:set_large_withdraw:')) {
-      const threshold = parseFloat(data.replace('settings:set_large_withdraw:', ''));
-      await setLargeWithdrawThreshold(ctx, threshold);
-      return;
-    }
-
-    if (data === 'settings:custom_large_withdraw') {
-      await showCustomLargeWithdrawPrompt(ctx);
       return;
     }
 

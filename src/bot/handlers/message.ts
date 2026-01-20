@@ -194,18 +194,7 @@ async function handleWithdrawAddress(ctx: BotContext, address: string): Promise<
 }
 
 /**
- * Get default withdrawal settings.
- */
-function getDefaultWithdrawSettings() {
-  return {
-    dailyWithdrawLimitSol: 10,
-    withdrawDelayMinutes: 0,
-    largeWithdrawThresholdSol: 5,
-  };
-}
-
-/**
- * Handle withdraw amount input with security checks.
+ * Handle withdraw amount input.
  */
 async function handleWithdrawAmount(ctx: BotContext, amountStr: string): Promise<void> {
   const userId = getUserId(ctx);
@@ -260,37 +249,13 @@ async function handleWithdrawAmount(ctx: BotContext, amountStr: string): Promise
     return;
   }
 
-  // Get user settings for withdrawal limits
-  const settings = await db.getUserSettings(userId);
-  const limits = settings || getDefaultWithdrawSettings();
-
-  // Check daily withdrawal limit
-  const todayWithdrawals = await db.getTodayWithdrawals(userId);
-  const remainingLimit = limits.dailyWithdrawLimitSol - todayWithdrawals;
-
-  if (amountSol > remainingLimit) {
-    await ctx.reply(
-      `⚠️ *Daily Withdrawal Limit Exceeded*\n\n` +
-      `*Daily limit:* ${limits.dailyWithdrawLimitSol} SOL\n` +
-      `*Already withdrawn today:* ${todayWithdrawals.toFixed(4)} SOL\n` +
-      `*Remaining:* ${remainingLimit.toFixed(4)} SOL\n` +
-      `*Requested:* ${amountSol.toFixed(4)} SOL\n\n` +
-      `_You can adjust your daily limit in Settings → Withdrawal Limits_`,
-      { parse_mode: 'Markdown' }
-    );
-    return;
-  }
-
-  // Check if this is a large withdrawal requiring extra warning
-  const isLargeWithdrawal = amountSol >= limits.largeWithdrawThresholdSol;
-
   // Store amount and show confirmation
   ctx.session.withdrawAmount = amountSol;
   ctx.session.state = 'awaiting_withdraw_confirm';
 
   const shortDestination = `${destinationAddress.slice(0, 8)}...${destinationAddress.slice(-8)}`;
 
-  let confirmMessage = `
+  const confirmMessage = `
 📤 *Confirm Withdrawal*
 
 *Amount:* ${amountSol.toFixed(4)} SOL
@@ -298,17 +263,7 @@ async function handleWithdrawAmount(ctx: BotContext, amountStr: string): Promise
 *You will receive:* ~${(amountSol - networkFee).toFixed(4)} SOL
 
 *To:* \`${shortDestination}\`
-`;
 
-  if (isLargeWithdrawal) {
-    confirmMessage += `
-🚨 *LARGE WITHDRAWAL WARNING*
-This withdrawal exceeds your large withdrawal threshold (${limits.largeWithdrawThresholdSol} SOL).
-Please double-check the destination address!
-`;
-  }
-
-  confirmMessage += `
 ⚠️ *This action cannot be undone!*
 
 Type \`CONFIRM\` to proceed or \`CANCEL\` to abort.`;

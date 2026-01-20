@@ -45,7 +45,7 @@ interface SessionData {
   withdrawAmount?: number;
 
   // Settings operation data
-  pendingSetting?: 'buy_amount' | 'slippage' | 'auto_sl' | 'auto_tp' | 'daily_limit' | 'large_withdraw';
+  pendingSetting?: 'buy_amount' | 'slippage' | 'auto_sl' | 'auto_tp';
 }
 
 /**

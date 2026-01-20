@@ -177,8 +177,6 @@ export function settingsMenuKeyboard(): InlineKeyboard {
     .row()
     .text('🎯 Auto Take Profit', 'settings:auto_tp')
     .row()
-    .text('🔐 Withdrawal Limits', 'settings:withdraw_limits')
-    .row()
     .text('« Back', 'menu:main');
 }
 

@@ -67,10 +67,6 @@ export interface UserSettings {
   autoSlPercent: number | null;
   autoTpPercent: number | null;
   notificationsEnabled: boolean;
-  // Withdrawal security settings
-  dailyWithdrawLimitSol: number;
-  withdrawDelayMinutes: number;
-  largeWithdrawThresholdSol: number;
   createdAt: Date;
 }
 
@@ -427,9 +423,6 @@ export class Database {
     if (settings.autoSlPercent !== undefined) updateData.auto_sl_percent = settings.autoSlPercent;
     if (settings.autoTpPercent !== undefined) updateData.auto_tp_percent = settings.autoTpPercent;
     if (settings.notificationsEnabled !== undefined) updateData.notifications_enabled = settings.notificationsEnabled;
-    if (settings.dailyWithdrawLimitSol !== undefined) updateData.daily_withdraw_limit_sol = settings.dailyWithdrawLimitSol;
-    if (settings.withdrawDelayMinutes !== undefined) updateData.withdraw_delay_minutes = settings.withdrawDelayMinutes;
-    if (settings.largeWithdrawThresholdSol !== undefined) updateData.large_withdraw_threshold_sol = settings.largeWithdrawThresholdSol;
 
     const { error } = await this.client
       .from('tb_user_settings')
@@ -438,49 +431,6 @@ export class Database {
       });
 
     return !error;
-  }
-
-  /**
-   * Get today's total withdrawal amount for a user.
-   */
-  async getTodayWithdrawals(userId: string): Promise<number> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const { data, error } = await this.client
-      .from('tb_transactions')
-      .select('amount_sol')
-      .eq('user_id', userId)
-      .eq('type', 'withdraw')
-      .eq('status', 'success')
-      .gte('created_at', today.toISOString());
-
-    if (error || !data) {
-      return 0;
-    }
-
-    return data.reduce((sum, tx) => sum + (tx.amount_sol || 0), 0);
-  }
-
-  /**
-   * Get the time of the last withdrawal for a user.
-   */
-  async getLastWithdrawalTime(userId: string): Promise<Date | null> {
-    const { data, error } = await this.client
-      .from('tb_transactions')
-      .select('created_at')
-      .eq('user_id', userId)
-      .eq('type', 'withdraw')
-      .eq('status', 'success')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    if (error || !data) {
-      return null;
-    }
-
-    return new Date(data.created_at);
   }
 
   // ============================================
@@ -554,10 +504,6 @@ export class Database {
       autoSlPercent: data.auto_sl_percent ? Number(data.auto_sl_percent) : null,
       autoTpPercent: data.auto_tp_percent ? Number(data.auto_tp_percent) : null,
       notificationsEnabled: data.notifications_enabled !== false,
-      // Withdrawal security with defaults
-      dailyWithdrawLimitSol: data.daily_withdraw_limit_sol ? Number(data.daily_withdraw_limit_sol) : 10,
-      withdrawDelayMinutes: data.withdraw_delay_minutes ? Number(data.withdraw_delay_minutes) : 0,
-      largeWithdrawThresholdSol: data.large_withdraw_threshold_sol ? Number(data.large_withdraw_threshold_sol) : 5,
       createdAt: new Date(data.created_at as string),
     };
   }
