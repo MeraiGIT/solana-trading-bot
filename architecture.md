@@ -76,12 +76,12 @@ A custodial Solana trading bot with direct DEX integration, designed for multi-u
 
 ### 2. Wallet Manager (`src/wallet/`)
 
-**Purpose**: Secure wallet creation, import, and management
+**Purpose**: Secure wallet creation, import, and management + on-chain balance queries
 
 | Component | File | Description |
 |-----------|------|-------------|
 | Encryption | `encryption.ts` | AES-256-GCM encrypt/decrypt |
-| Manager | `manager.ts` | Wallet CRUD operations |
+| Manager | `manager.ts` | Wallet CRUD + SPL token balance queries |
 
 **Security Flow**:
 ```
@@ -93,6 +93,32 @@ Private Key → PBKDF2(master_key + salt + user_id) → AES-256-GCM → Database
 - Base58 private key import
 - Secure encryption with per-user salt
 - Memory clearing after operations
+- **On-chain SPL token balance queries** (v0.4.0)
+
+**On-Chain Balance Methods** (v0.4.0):
+```typescript
+interface TokenBalance {
+  mint: string;       // Token mint address
+  amount: number;     // Human-readable amount
+  rawAmount: string;  // Raw amount in smallest units
+  decimals: number;   // Token decimals
+}
+
+// Query single token balance from blockchain
+getTokenBalance(walletAddress, tokenMint, useCache?): Promise<TokenBalance | null>
+
+// Query all SPL token balances
+getAllTokenBalances(walletAddress): Promise<TokenBalance[]>
+
+// Invalidate cache after trades
+invalidateTokenBalanceCache(walletAddress, tokenMint): void
+```
+
+**Why On-Chain Queries?** (v0.4.0)
+- Database stored expected amounts from Jupiter swaps
+- Due to fees/slippage, actual on-chain balances drift from DB
+- 100% sells failed with error 0x1788 (insufficient balance)
+- Solution: Query blockchain for real balance before all sells
 
 ### 3. Trading Engine (`src/trading/`)
 
@@ -180,6 +206,20 @@ HELIUS_API_KEY=xxx         # For dynamic priority fee estimates
 ---
 
 ## Database Schema
+
+### Database Role (v0.4.0 Change)
+
+**IMPORTANT**: As of v0.4.0, the database is **metadata-only storage** for positions:
+
+| Field | Source | Notes |
+|-------|--------|-------|
+| `amount` | ~~Database~~ **Blockchain** | Always query on-chain for sells |
+| `entry_price_usd` | Database | Historical, can't get from chain |
+| `entry_sol` | Database | How much SOL was spent |
+| `token_symbol` | Database | Convenience cache |
+| `token_decimals` | Database | Convenience cache |
+
+**Why?** Jupiter swap estimates differ from actual received tokens due to fees, slippage, and rounding. The database would show 59.63 tokens while blockchain had 58.98, causing 100% sells to fail.
 
 ### Tables (Supabase - tb_ prefix)
 
