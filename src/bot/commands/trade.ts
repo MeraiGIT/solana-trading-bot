@@ -188,6 +188,61 @@ function createBuyKeyboard(tokenAddress: string) {
 }
 
 /**
+ * Helper to send or edit message depending on context.
+ * Returns the message ID of the status message for later updates.
+ */
+async function sendStatusMessage(
+  ctx: BotContext,
+  text: string,
+  keyboard?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }
+): Promise<number | null> {
+  const options: { parse_mode: 'Markdown'; reply_markup?: typeof keyboard } = {
+    parse_mode: 'Markdown',
+  };
+  if (keyboard) {
+    options.reply_markup = keyboard;
+  }
+
+  // Try to edit existing message first (works for callbacks)
+  try {
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(text, options);
+      return ctx.callbackQuery.message?.message_id || null;
+    }
+  } catch {
+    // Fall through to reply
+  }
+
+  // Send new message (for text input or if edit fails)
+  const msg = await ctx.reply(text, options);
+  return msg.message_id;
+}
+
+/**
+ * Helper to update a status message by ID.
+ */
+async function updateStatusMessage(
+  ctx: BotContext,
+  messageId: number,
+  text: string,
+  keyboard?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }
+): Promise<void> {
+  const options: { parse_mode: 'Markdown'; reply_markup?: typeof keyboard } = {
+    parse_mode: 'Markdown',
+  };
+  if (keyboard) {
+    options.reply_markup = keyboard;
+  }
+
+  try {
+    await ctx.api.editMessageText(ctx.chat!.id, messageId, text, options);
+  } catch {
+    // If edit fails, send new message
+    await ctx.reply(text, options);
+  }
+}
+
+/**
  * Handle buy callback.
  */
 export async function handleBuy(
@@ -209,14 +264,10 @@ export async function handleBuy(
     ctx.session.state = 'awaiting_buy_amount';
     ctx.session.tradeToken = { address: tokenAddress, symbol: '', name: '', decimals: 9, priceUsd: 0 };
 
-    await ctx.editMessageText(
+    await sendStatusMessage(
+      ctx,
       '✏️ *Custom Buy Amount*\n\nEnter the amount in SOL you want to spend (e.g., `0.5`)',
-      {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'menu:main' }]],
-        },
-      }
+      { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'menu:main' }]] }
     );
     return;
   }
@@ -227,27 +278,70 @@ export async function handleBuy(
     return;
   }
 
-  // Check balance
-  try {
-    const balance = await walletManager.getBalance(wallet.publicAddress);
-    if (balance.sol < solAmount + 0.01) { // Reserve 0.01 SOL for fees
-      await sendError(ctx, `Insufficient balance. You have ${balance.sol.toFixed(4)} SOL.`);
-      return;
-    }
-  } catch {
-    await sendError(ctx, 'Error checking balance. Please try again.');
+  // Step 1: Show initializing message
+  const statusMsgId = await sendStatusMessage(
+    ctx,
+    `⏳ *Initializing Trade...*\n\n` +
+    `💰 Amount: ${solAmount} SOL\n` +
+    `🔍 Checking balance...`
+  );
+
+  if (!statusMsgId) {
+    await sendError(ctx, 'Error initializing trade.');
     return;
   }
 
-  // Show confirmation
-  await ctx.editMessageText(
-    `⏳ *Buying...*\n\nSpending ${solAmount} SOL on token...\n\n_Please wait, this may take a moment._`,
-    { parse_mode: 'Markdown' }
+  // Step 2: Check balance
+  let balance;
+  try {
+    balance = await walletManager.getBalance(wallet.publicAddress);
+    if (balance.sol < solAmount + 0.01) {
+      await updateStatusMessage(
+        ctx,
+        statusMsgId,
+        `❌ *Insufficient Balance*\n\n` +
+        `*Requested:* ${solAmount} SOL\n` +
+        `*Available:* ${balance.sol.toFixed(4)} SOL\n` +
+        `*Reserved for fees:* ~0.01 SOL\n\n` +
+        `Please deposit more SOL to continue.`,
+        { inline_keyboard: [[{ text: '💰 Wallet', callback_data: 'menu:wallet' }], [{ text: '🏠 Main Menu', callback_data: 'menu:main' }]] }
+      );
+      return;
+    }
+  } catch (error) {
+    await updateStatusMessage(
+      ctx,
+      statusMsgId,
+      `❌ *Error Checking Balance*\n\n${(error as Error).message}\n\nPlease try again.`,
+      { inline_keyboard: [[{ text: '🏠 Main Menu', callback_data: 'menu:main' }]] }
+    );
+    return;
+  }
+
+  // Step 3: Update - getting token info
+  await updateStatusMessage(
+    ctx,
+    statusMsgId,
+    `⏳ *Preparing Trade...*\n\n` +
+    `💰 Amount: ${solAmount} SOL\n` +
+    `✅ Balance: ${balance.sol.toFixed(4)} SOL\n` +
+    `🔍 Fetching token info...`
   );
 
   try {
     // Get keypair for signing
     const keypair = walletManager.getKeypair(wallet);
+
+    // Step 4: Update - executing swap
+    await updateStatusMessage(
+      ctx,
+      statusMsgId,
+      `⏳ *Executing Trade...*\n\n` +
+      `💰 Amount: ${solAmount} SOL\n` +
+      `✅ Balance verified\n` +
+      `🔄 Sending transaction to DEX...\n\n` +
+      `_This may take 10-30 seconds..._`
+    );
 
     // Execute buy
     const result = await router.buy(tokenAddress, solAmount, keypair, {
@@ -258,6 +352,16 @@ export async function handleBuy(
     if (result.success) {
       // Get token info for position
       const tokenInfo = result.tokenInfo;
+      const tokensReceived = result.outputAmount ? Number(result.outputAmount) : 0;
+
+      // Step 5: Update - saving position
+      await updateStatusMessage(
+        ctx,
+        statusMsgId,
+        `⏳ *Finalizing...*\n\n` +
+        `✅ Transaction confirmed!\n` +
+        `📝 Saving position...`
+      );
 
       // Save position to database
       if (tokenInfo) {
@@ -266,7 +370,7 @@ export async function handleBuy(
           tokenAddress,
           tokenSymbol: tokenInfo.symbol,
           tokenDecimals: tokenInfo.decimals,
-          amount: result.outputAmount ? Number(result.outputAmount) : 0,
+          amount: tokensReceived,
           entryPriceUsd: tokenInfo.priceUsd,
           entrySol: solAmount,
         });
@@ -278,7 +382,7 @@ export async function handleBuy(
         type: 'buy',
         tokenAddress,
         tokenSymbol: tokenInfo?.symbol || null,
-        amountTokens: result.outputAmount ? Number(result.outputAmount) : null,
+        amountTokens: tokensReceived || null,
         amountSol: solAmount,
         priceUsd: tokenInfo?.priceUsd || null,
         txSignature: result.signature || null,
@@ -287,26 +391,34 @@ export async function handleBuy(
         errorMessage: null,
       });
 
+      // Step 6: Show success with position details
+      const dexName = result.dexUsed === 'jupiter' ? 'Jupiter' : 'PumpPortal';
+      const shortSig = result.signature ? `${result.signature.slice(0, 8)}...${result.signature.slice(-8)}` : null;
+
       const successMsg = `
 ✅ *Buy Successful!*
 
-*Token:* ${tokenInfo?.symbol || 'Unknown'}
+*Token:* ${tokenInfo?.symbol || 'Unknown'} (${tokenInfo?.name || ''})
 *Spent:* ${solAmount} SOL
-*Via:* ${result.dexUsed === 'jupiter' ? 'Jupiter' : 'PumpPortal'}
-${result.signature ? `\n[View on Solscan](https://solscan.io/tx/${result.signature})` : ''}
+*Received:* ${formatNumber(tokensReceived)} tokens
+*Price:* ${formatPrice(tokenInfo?.priceUsd || 0)}
+*DEX:* ${dexName}
 
-Use /positions to view your holdings.
+${shortSig ? `*Tx:* \`${shortSig}\`\n[View on Solscan](https://solscan.io/tx/${result.signature})` : ''}
+
+━━━━━━━━━━━━━━━━━━
+📊 *Position Created*
+Entry: ${formatPrice(tokenInfo?.priceUsd || 0)}
+Holdings: ${formatNumber(tokensReceived)} ${tokenInfo?.symbol || 'tokens'}
       `.trim();
 
-      await ctx.editMessageText(successMsg, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '📊 View Position', callback_data: 'trade:positions' }],
-            [{ text: '🔄 Buy More', callback_data: `token:${tokenAddress}` }],
-            [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
-          ],
-        },
+      await updateStatusMessage(ctx, statusMsgId, successMsg, {
+        inline_keyboard: [
+          [{ text: '📊 View Positions', callback_data: 'trade:positions' }],
+          [{ text: '🛑 Set Stop Loss', callback_data: `sl:${tokenAddress}` }, { text: '🎯 Set Take Profit', callback_data: `tp:${tokenAddress}` }],
+          [{ text: '🔄 Buy More', callback_data: `token:${tokenAddress}` }],
+          [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+        ],
       });
     } else {
       // Record failed transaction
@@ -324,28 +436,35 @@ Use /positions to view your holdings.
         errorMessage: result.error || 'Unknown error',
       });
 
-      await ctx.editMessageText(
-        `❌ *Buy Failed*\n\n${result.error || 'Transaction failed'}\n\nPlease try again.`,
+      await updateStatusMessage(
+        ctx,
+        statusMsgId,
+        `❌ *Buy Failed*\n\n` +
+        `*Error:* ${result.error || 'Transaction failed'}\n\n` +
+        `This can happen due to:\n` +
+        `• High slippage / price moved\n` +
+        `• Insufficient liquidity\n` +
+        `• Network congestion\n\n` +
+        `Please try again.`,
         {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '🔄 Try Again', callback_data: `token:${tokenAddress}` }],
-              [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
-            ],
-          },
+          inline_keyboard: [
+            [{ text: '🔄 Try Again', callback_data: `token:${tokenAddress}` }],
+            [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+          ],
         }
       );
     }
   } catch (error) {
     console.error('Buy error:', error);
-    await ctx.editMessageText(
+    await updateStatusMessage(
+      ctx,
+      statusMsgId,
       `❌ *Error*\n\n${(error as Error).message}\n\nPlease try again.`,
       {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [[{ text: '🏠 Main Menu', callback_data: 'menu:main' }]],
-        },
+        inline_keyboard: [
+          [{ text: '🔄 Try Again', callback_data: `token:${tokenAddress}` }],
+          [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+        ],
       }
     );
   }
