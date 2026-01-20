@@ -295,9 +295,12 @@ export class JupiterClient {
       });
 
       if (swapResponse.simulationError) {
+        const errorMsg = typeof swapResponse.simulationError === 'string'
+          ? swapResponse.simulationError
+          : JSON.stringify(swapResponse.simulationError);
         return {
           success: false,
-          error: `Simulation failed: ${swapResponse.simulationError}`,
+          error: `Simulation failed: ${errorMsg}`,
           inputAmount: quoteResponse.inAmount,
           outputAmount: quoteResponse.outAmount,
           priceImpact: quoteResponse.priceImpactPct,

@@ -355,7 +355,10 @@ export async function handleBuy(
     if (result.success) {
       // Get token info for position
       const tokenInfo = result.tokenInfo;
-      const tokensReceived = result.outputAmount ? Number(result.outputAmount) : 0;
+      // Convert raw token amount to human-readable (divide by 10^decimals)
+      const decimals = tokenInfo?.decimals ?? 9;
+      const tokensReceivedRaw = result.outputAmount ? Number(result.outputAmount) : 0;
+      const tokensReceived = tokensReceivedRaw / Math.pow(10, decimals);
 
       // Step 5: Update - saving position
       await updateStatusMessage(
