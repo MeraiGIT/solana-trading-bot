@@ -1,9 +1,9 @@
 # Project Status - Solana Trading Bot
 
-> **Last Updated**: 2026-01-19
-> **Current Version**: 0.3.0
-> **Current Phase**: Phase 3 - Position Management + MEV Protection
-> **Overall Progress**: 85%
+> **Last Updated**: 2026-01-20
+> **Current Version**: 0.3.1
+> **Current Phase**: Phase 4 - Testing & Polish
+> **Overall Progress**: 90%
 
 ---
 
@@ -76,7 +76,7 @@
 
 ---
 
-## Phase 4: Position Management (IN PROGRESS)
+## Phase 4: Position Management (COMPLETE)
 
 ### Completed
 - [x] Position display with PnL calculation
@@ -84,13 +84,14 @@
 - [x] Stop Loss order creation
 - [x] Take Profit order creation
 - [x] Order cancellation
+- [x] Transaction history view (/history command)
+- [x] Settings menu (buy amount, slippage, auto SL/TP)
+- [x] Trade progress feedback (step-by-step status updates)
+- [x] Withdraw SOL functionality
+- [x] QR code for deposit address
 
-### In Progress
-- [ ] Test trading flow end-to-end
-
-### Pending
-- [ ] Position history
-- [ ] Transaction history view
+### Removed
+- Withdrawal limits (unnecessary friction for personal bot)
 
 ---
 
@@ -169,12 +170,27 @@ src/trading/
 
 ## Known Issues
 
-1. Price monitor not started automatically (needs integration in index.ts)
-2. Need to test with real tokens on mainnet
+1. ~~Price monitor not started automatically~~ **FIXED** - Auto-starts on bot startup
+2. Need to continue testing with real tokens on mainnet
 
 ---
 
 ## Session Log
+
+### 2026-01-20 (Session 4)
+- **Bug Fix: Trade Progress Feedback**
+  - Identified bug where custom buy amounts showed no UI feedback
+  - Root cause: `ctx.editMessageText()` fails silently in text message context
+  - Added `sendStatusMessage()` and `updateStatusMessage()` helpers
+  - Trade now shows step-by-step progress (6 stages from init to completion)
+  - Success message now includes position summary with SL/TP buttons
+- **Removed: Withdrawal Limits**
+  - Removed as unnecessary friction for personal trading bot
+  - Security already handled by wallet encryption + Telegram auth
+- **Testing Phase**
+  - Created comprehensive testing plan (8 phases, 50+ test cases)
+  - Started manual testing at Phase 3.4
+  - Build passes successfully
 
 ### 2026-01-19 (Session 3)
 - **MEV Protection Implementation**

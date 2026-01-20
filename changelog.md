@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.3.1] - 2026-01-20
+
+### Fixed
+- **Trade Progress Feedback** (`src/bot/commands/trade.ts`)
+  - Fixed critical bug where custom buy amounts showed no feedback to user
+  - Issue: `ctx.editMessageText()` silently failed when called from text message context
+  - Added `sendStatusMessage()` helper that handles both callback and text message contexts
+  - Added `updateStatusMessage()` helper to update messages by ID
+  - Trade flow now shows step-by-step progress:
+    1. "Initializing Trade..."
+    2. "Checking balance..."
+    3. "Preparing Trade..."
+    4. "Executing Trade..."
+    5. "Finalizing..."
+    6. Success/Error with full details
+
+### Changed
+- **Trade Success Message**
+  - Now shows complete position summary after successful buy
+  - Includes entry price, holdings, and quick action buttons
+  - Added Set SL/TP buttons directly in success message
+  - Better error messages with troubleshooting tips
+
+### Removed
+- **Withdrawal Limits Feature**
+  - Removed daily withdrawal limits (unnecessary friction)
+  - Removed large withdrawal warnings
+  - Removed withdrawal limit settings from UI
+  - Security already handled by wallet encryption and Telegram auth
+
+---
+
 ## [0.3.0] - 2026-01-19
 
 ### Added
