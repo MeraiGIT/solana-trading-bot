@@ -20,6 +20,7 @@ export interface RouterConfig {
   preferPumpPortal?: boolean; // Prefer PumpPortal even for graduated tokens
   useJito?: boolean; // Enable Jito bundles for MEV protection
   heliusApiKey?: string; // For dynamic priority fees
+  jupiterApiKey?: string; // Jupiter API key (required for API access)
 }
 
 export interface TradeParams {
@@ -59,6 +60,7 @@ export class DexRouter {
       defaultPriorityFee: config.defaultPriorityFee ?? 100000,
       useJito: config.useJito ?? true, // Enable Jito by default
       heliusApiKey: config.heliusApiKey,
+      jupiterApiKey: config.jupiterApiKey,
     });
 
     this.pumpfun = new PumpFunClient(config.rpcUrl, {
@@ -68,7 +70,7 @@ export class DexRouter {
 
     this.tokenInfo = new TokenInfoService();
 
-    console.log(`[DexRouter] Initialized with Jito: ${config.useJito ?? true}, Helius: ${config.heliusApiKey ? 'Yes' : 'No'}`);
+    console.log(`[DexRouter] Initialized with Jito: ${config.useJito ?? true}, Helius: ${config.heliusApiKey ? 'Yes' : 'No'}, Jupiter API: ${config.jupiterApiKey ? 'Yes' : 'No'}`);
   }
 
   /**

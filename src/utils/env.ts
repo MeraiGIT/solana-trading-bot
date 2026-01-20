@@ -25,6 +25,9 @@ export interface AppConfig {
   solanaRpcUrl: string;
   heliusApiKey?: string;
 
+  // Jupiter API
+  jupiterApiKey?: string;
+
   // Encryption
   masterEncryptionKey: string;
 
@@ -105,6 +108,9 @@ function loadConfig(): AppConfig {
     // Solana
     solanaRpcUrl: process.env.SOLANA_RPC_URL!,
     heliusApiKey: process.env.HELIUS_API_KEY,
+
+    // Jupiter API
+    jupiterApiKey: process.env.JUPITER_API_KEY,
 
     // Encryption
     masterEncryptionKey: process.env.MASTER_ENCRYPTION_KEY!,

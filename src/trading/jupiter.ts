@@ -104,6 +104,7 @@ export class JupiterClient {
   private jitoClient: JitoClient | null = null;
   private priorityFeeService: PriorityFeeService;
   private useJito: boolean;
+  private apiKey?: string;
 
   constructor(
     rpcUrl: string,
@@ -112,12 +113,14 @@ export class JupiterClient {
       defaultPriorityFee?: number; // In lamports
       useJito?: boolean;
       heliusApiKey?: string;
+      jupiterApiKey?: string;
     }
   ) {
     this.connection = new Connection(rpcUrl, 'confirmed');
     this.defaultSlippageBps = options?.defaultSlippageBps ?? 500; // 5%
     this.defaultPriorityFee = options?.defaultPriorityFee ?? 100000; // 0.0001 SOL
     this.useJito = options?.useJito ?? true; // Enable Jito by default
+    this.apiKey = options?.jupiterApiKey;
 
     // Initialize Jito client if enabled
     if (this.useJito) {
@@ -126,6 +129,19 @@ export class JupiterClient {
 
     // Initialize priority fee service
     this.priorityFeeService = new PriorityFeeService(rpcUrl, options?.heliusApiKey);
+  }
+
+  /**
+   * Get request headers including API key if available
+   */
+  private getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Accept': 'application/json',
+    };
+    if (this.apiKey) {
+      headers['x-api-key'] = this.apiKey;
+    }
+    return headers;
   }
 
   /**
@@ -147,9 +163,7 @@ export class JupiterClient {
 
     const response = await fetch(`${JUPITER_QUOTE_API}?${queryParams}`, {
       method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-      },
+      headers: this.getHeaders(),
     });
 
     if (!response.ok) {
@@ -205,12 +219,17 @@ export class JupiterClient {
       prioritizationFeeLamports: params.prioritizationFeeLamports ?? this.defaultPriorityFee,
     };
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    if (this.apiKey) {
+      headers['x-api-key'] = this.apiKey;
+    }
+
     const response = await fetch(JUPITER_SWAP_API, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
+      headers,
       body: JSON.stringify(body),
     });
 

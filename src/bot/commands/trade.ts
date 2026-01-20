@@ -16,8 +16,11 @@ const walletManager = new WalletManager(
 
 const router = new DexRouter({
   rpcUrl: appConfig.solanaRpcUrl,
-  defaultSlippageBps: 500, // 5%
-  defaultPriorityFee: 100000, // 0.0001 SOL in lamports
+  defaultSlippageBps: appConfig.defaultSlippageBps,
+  defaultPriorityFee: appConfig.maxPriorityFeeLamports,
+  useJito: appConfig.useJito,
+  heliusApiKey: appConfig.heliusApiKey,
+  jupiterApiKey: appConfig.jupiterApiKey,
 });
 
 /**
