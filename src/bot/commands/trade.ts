@@ -381,17 +381,37 @@ export async function handleBuy(
         statusMsgId,
         `⏳ *Finalizing...*\n\n` +
         `✅ Transaction confirmed!\n` +
-        `📝 Saving position...`
+        `📝 Verifying on-chain balance...`
       );
 
-      // Save position to database
+      // Wait briefly for chain state to settle, then verify actual balance
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Invalidate cache and fetch real on-chain balance
+      walletManager.invalidateTokenBalanceCache(wallet.publicAddress, tokenAddress);
+      const verifiedBalance = await walletManager.getTokenBalance(
+        wallet.publicAddress,
+        tokenAddress,
+        false // Fresh fetch
+      );
+
+      // Use verified on-chain balance if available, otherwise fall back to Jupiter estimate
+      const finalTokenAmount = verifiedBalance?.amount ?? tokensReceived;
+      const finalDecimals = verifiedBalance?.decimals ?? decimals;
+
+      // Log if there's a discrepancy (for debugging)
+      if (verifiedBalance && Math.abs(verifiedBalance.amount - tokensReceived) > 0.01) {
+        console.log(`Buy verification: Jupiter estimate=${tokensReceived}, On-chain=${verifiedBalance.amount}`);
+      }
+
+      // Save position to database with verified amount
       if (tokenInfo) {
         await db.upsertPosition({
           userId,
           tokenAddress,
           tokenSymbol: tokenInfo.symbol,
-          tokenDecimals: tokenInfo.decimals,
-          amount: tokensReceived,
+          tokenDecimals: finalDecimals,
+          amount: finalTokenAmount, // Use verified on-chain amount
           entryPriceUsd: tokenInfo.priceUsd,
           entrySol: solAmount,
         });
@@ -421,7 +441,7 @@ export async function handleBuy(
 
 *Token:* ${tokenInfo?.symbol || 'Unknown'} (${tokenInfo?.name || ''})
 *Spent:* ${solAmount} SOL
-*Received:* ${formatNumber(tokensReceived)} tokens
+*Received:* ${formatNumber(finalTokenAmount)} tokens
 *Price:* ${formatPrice(tokenInfo?.priceUsd || 0)}
 *DEX:* ${dexName}
 
@@ -430,7 +450,7 @@ ${shortSig ? `*Tx:* \`${shortSig}\`\n[View on Solscan](https://solscan.io/tx/${r
 ━━━━━━━━━━━━━━━━━━
 📊 *Position Created*
 Entry: ${formatPrice(tokenInfo?.priceUsd || 0)}
-Holdings: ${formatNumber(tokensReceived)} ${tokenInfo?.symbol || 'tokens'}
+Holdings: ${formatNumber(finalTokenAmount)} ${tokenInfo?.symbol || 'tokens'}
       `.trim();
 
       await updateStatusMessage(ctx, statusMsgId, successMsg, {
@@ -493,13 +513,15 @@ Holdings: ${formatNumber(tokensReceived)} ${tokenInfo?.symbol || 'tokens'}
 
 /**
  * Show user positions.
+ * Uses real on-chain balances and cleans up stale positions.
  */
 export async function showPositions(ctx: BotContext): Promise<void> {
   const userId = getUserId(ctx);
 
+  const wallet = await db.getWallet(userId);
   const positions = await db.getPositions(userId);
 
-  if (positions.length === 0) {
+  if (positions.length === 0 || !wallet) {
     const message = `
 📊 *Your Positions*
 
@@ -526,11 +548,29 @@ Paste a token address to start trading!
     return;
   }
 
-  // Build positions list with current prices
+  // Build positions list with current prices and on-chain balances
   let positionsList = '';
   const buttons: { text: string; callback_data: string }[][] = [];
+  const validPositions: typeof positions = [];
 
   for (const pos of positions.slice(0, 5)) { // Show max 5
+    // Fetch real on-chain balance
+    const onChainBalance = await walletManager.getTokenBalance(
+      wallet.publicAddress,
+      pos.tokenAddress
+    );
+
+    // If no tokens on-chain, clean up stale position silently
+    if (!onChainBalance || onChainBalance.amount <= 0) {
+      await db.deletePosition(userId, pos.tokenAddress);
+      continue;
+    }
+
+    validPositions.push(pos);
+
+    // Use on-chain balance for display
+    const displayAmount = onChainBalance.amount;
+
     // Get current price
     const info = await router.getTokenInfo(pos.tokenAddress);
     const currentPrice = info?.priceUsd || 0;
@@ -541,8 +581,11 @@ Paste a token address to start trading!
     const pnlText = pnlPercent >= 0 ? `+${pnlPercent.toFixed(2)}%` : `${pnlPercent.toFixed(2)}%`;
     const safeSymbol = escapeMarkdown(pos.tokenSymbol || 'Unknown');
 
-    positionsList += `\n*${safeSymbol}*\n`;
-    positionsList += `  Amount: ${formatNumber(pos.amount)}\n`;
+    // Show sync indicator if DB differs from on-chain
+    const syncIndicator = Math.abs(pos.amount - displayAmount) > 0.01 ? ' 🔄' : '';
+
+    positionsList += `\n*${safeSymbol}*${syncIndicator}\n`;
+    positionsList += `  Amount: ${formatNumber(displayAmount)}\n`;
     positionsList += `  Entry: ${formatPrice(entryPrice)}\n`;
     positionsList += `  Current: ${formatPrice(currentPrice)}\n`;
     positionsList += `  PnL: ${pnlEmoji} ${pnlText}\n`;
@@ -552,12 +595,41 @@ Paste a token address to start trading!
     ]);
   }
 
+  // If all positions were stale, show empty state
+  if (validPositions.length === 0) {
+    const message = `
+📊 *Your Positions*
+
+_No open positions._
+
+Paste a token address to start trading!
+    `.trim();
+
+    try {
+      await ctx.editMessageText(message, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[{ text: '◀️ Back', callback_data: 'menu:main' }]],
+        },
+      });
+    } catch {
+      await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[{ text: '◀️ Back', callback_data: 'menu:main' }]],
+        },
+      });
+    }
+    return;
+  }
+
   const message = `
 📊 *Your Positions*
 ${positionsList}
 Select a position to sell or manage:
   `.trim();
 
+  buttons.push([{ text: '🔄 Refresh', callback_data: 'trade:positions' }]);
   buttons.push([{ text: '◀️ Back', callback_data: 'menu:main' }]);
 
   try {
@@ -575,15 +647,33 @@ Select a position to sell or manage:
 
 /**
  * Show sell options for a position.
+ * Uses real on-chain balance for display.
  */
 export async function showSellOptions(ctx: BotContext, tokenAddress: string): Promise<void> {
   const userId = getUserId(ctx);
 
+  const wallet = await db.getWallet(userId);
   const position = await db.getPosition(userId, tokenAddress);
-  if (!position) {
-    await sendError(ctx, 'Position not found.');
+  if (!position || !wallet) {
+    await sendError(ctx, 'Position or wallet not found.');
     return;
   }
+
+  // Fetch real on-chain balance
+  const onChainBalance = await walletManager.getTokenBalance(
+    wallet.publicAddress,
+    tokenAddress
+  );
+
+  // If no tokens on-chain, clean up stale position
+  if (!onChainBalance || onChainBalance.amount <= 0) {
+    await db.deletePosition(userId, tokenAddress);
+    await sendError(ctx, 'No tokens found on-chain. Position has been removed.');
+    return;
+  }
+
+  // Use on-chain balance for display
+  const displayAmount = onChainBalance.amount;
 
   const info = await router.getTokenInfo(tokenAddress);
   const currentPrice = info?.priceUsd || 0;
@@ -591,10 +681,17 @@ export async function showSellOptions(ctx: BotContext, tokenAddress: string): Pr
   const pnlPercent = entryPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : 0;
 
   const safeSymbol = escapeMarkdown(position.tokenSymbol || 'Token');
+
+  // Show warning if DB differs from on-chain
+  const balanceMismatch = Math.abs(position.amount - displayAmount) > 0.01;
+  const mismatchWarning = balanceMismatch
+    ? `\n⚠️ _Balance synced from blockchain_`
+    : '';
+
   const message = `
 📤 *Sell ${safeSymbol}*
 
-*Holdings:* ${formatNumber(position.amount)}
+*Holdings:* ${formatNumber(displayAmount)}${mismatchWarning}
 *Current Price:* ${formatPrice(currentPrice)}
 *Entry Price:* ${formatPrice(entryPrice)}
 *PnL:* ${pnlPercent >= 0 ? '🟢' : '🔴'} ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%
@@ -634,6 +731,7 @@ export async function showSellOptions(ctx: BotContext, tokenAddress: string): Pr
 
 /**
  * Handle sell callback.
+ * CRITICAL: Uses real on-chain balance, not database amount.
  */
 export async function handleSell(
   ctx: BotContext,
@@ -657,9 +755,29 @@ export async function handleSell(
     return;
   }
 
-  const sellAmount = (position.amount * percentage) / 100;
-  const decimals = position.tokenDecimals || 9;
+  // CRITICAL: Fetch REAL on-chain balance instead of using database amount
+  const onChainBalance = await walletManager.getTokenBalance(
+    wallet.publicAddress,
+    tokenAddress,
+    false // Don't use cache - we need fresh data for sells
+  );
+
+  // If no tokens on-chain, clean up stale position
+  if (!onChainBalance || onChainBalance.amount <= 0) {
+    await db.deletePosition(userId, tokenAddress);
+    await sendError(ctx, 'No tokens found on-chain. Position has been cleaned up.');
+    return;
+  }
+
+  // Use on-chain balance and decimals for sell calculation
+  const sellAmount = (onChainBalance.amount * percentage) / 100;
+  const decimals = onChainBalance.decimals;
   const safeSymbol = escapeMarkdown(position.tokenSymbol || 'tokens');
+
+  // Log if there's a mismatch between DB and on-chain (for debugging)
+  if (Math.abs(position.amount - onChainBalance.amount) > 0.01) {
+    console.log(`Balance mismatch for ${tokenAddress}: DB=${position.amount}, On-chain=${onChainBalance.amount}`);
+  }
 
   // Show selling message
   await ctx.editMessageText(
@@ -678,14 +796,28 @@ export async function handleSell(
     if (result.success) {
       const solReceived = result.outputAmount ? Number(result.outputAmount) / 1e9 : 0;
 
-      // Update position
-      const newAmount = position.amount - sellAmount;
-      if (newAmount <= 0.0001) {
+      // Invalidate cache after sell
+      walletManager.invalidateTokenBalanceCache(wallet.publicAddress, tokenAddress);
+
+      // Wait briefly for chain state to settle, then sync with on-chain balance
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Fetch actual remaining balance from chain (not calculated from DB)
+      const remainingBalance = await walletManager.getTokenBalance(
+        wallet.publicAddress,
+        tokenAddress,
+        false // Fresh fetch
+      );
+
+      // Update or delete position based on actual on-chain balance
+      if (!remainingBalance || remainingBalance.amount <= 0.0001) {
         await db.deletePosition(userId, tokenAddress);
+        // Cancel any active orders for this position
+        await db.cancelOrdersForPosition(position.id);
       } else {
         await db.upsertPosition({
           ...position,
-          amount: newAmount,
+          amount: remainingBalance.amount, // Sync with actual on-chain balance
         });
       }
 
@@ -972,43 +1104,77 @@ Use the position menu to set SL/TP orders.
         },
       });
     } catch {
-      await ctx.reply(message, { parse_mode: 'Markdown' });
+      await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[{ text: '◀️ Back', callback_data: 'menu:main' }]],
+        },
+      });
     }
     return;
   }
 
   let ordersList = '';
-  const cancelButtons: { text: string; callback_data: string }[][] = [];
+  const buttons: { text: string; callback_data: string }[][] = [];
 
   for (const order of orders) {
     const typeEmoji = order.orderType === 'stop_loss' ? '🛑' : '🎯';
     const typeName = order.orderType === 'stop_loss' ? 'Stop Loss' : 'Take Profit';
+    const safeSymbol = escapeMarkdown(order.tokenSymbol || 'Unknown');
 
-    ordersList += `\n${typeEmoji} *${typeName}*\n`;
-    ordersList += `  Trigger: ${formatPrice(order.triggerPrice)}\n`;
-    ordersList += `  Sell: ${order.sellPercentage}%\n`;
+    // Get current price for comparison
+    let currentPrice = 0;
+    if (order.tokenAddress) {
+      const info = await router.getTokenInfo(order.tokenAddress);
+      currentPrice = info?.priceUsd || 0;
+    }
 
-    cancelButtons.push([
-      { text: `❌ Cancel ${typeName}`, callback_data: `cancel_order:${order.id}` },
+    // Calculate distance to trigger
+    const distancePercent = currentPrice > 0
+      ? ((order.triggerPrice - currentPrice) / currentPrice) * 100
+      : 0;
+    const distanceText = distancePercent >= 0
+      ? `+${distancePercent.toFixed(1)}%`
+      : `${distancePercent.toFixed(1)}%`;
+
+    ordersList += `\n${typeEmoji} *${typeName}* - ${safeSymbol}\n`;
+    ordersList += `  📍 Trigger: ${formatPrice(order.triggerPrice)}\n`;
+    ordersList += `  💰 Current: ${formatPrice(currentPrice)} (${distanceText})\n`;
+    if (order.entryPriceUsd) {
+      ordersList += `  📈 Entry: ${formatPrice(order.entryPriceUsd)}\n`;
+    }
+    ordersList += `  📊 Sell: ${order.sellPercentage}%`;
+    if (order.positionAmount) {
+      const sellAmount = (order.positionAmount * order.sellPercentage) / 100;
+      ordersList += ` (${formatNumber(sellAmount)} tokens)`;
+    }
+    ordersList += '\n';
+
+    // Button text doesn't need escaping
+    const buttonSymbol = order.tokenSymbol || 'Unknown';
+    buttons.push([
+      { text: `❌ Cancel ${buttonSymbol} ${typeName}`, callback_data: `cancel_order:${order.id}` },
     ]);
   }
 
   const message = `
 📋 *Active Orders*
 ${ordersList}
+_Orders will trigger automatically when price conditions are met._
   `.trim();
 
-  cancelButtons.push([{ text: '◀️ Back', callback_data: 'menu:main' }]);
+  buttons.push([{ text: '📊 Positions', callback_data: 'trade:positions' }]);
+  buttons.push([{ text: '◀️ Back', callback_data: 'menu:main' }]);
 
   try {
     await ctx.editMessageText(message, {
       parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: cancelButtons },
+      reply_markup: { inline_keyboard: buttons },
     });
   } catch {
     await ctx.reply(message, {
       parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: cancelButtons },
+      reply_markup: { inline_keyboard: buttons },
     });
   }
 }

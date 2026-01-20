@@ -212,6 +212,7 @@ export class PriceMonitor {
 
   /**
    * Execute a triggered order
+   * CRITICAL: Uses real on-chain balance, not database amount.
    */
   private async triggerOrder(
     order: DbLimitOrder,
@@ -225,17 +226,38 @@ export class PriceMonitor {
         throw new Error('Failed to get user wallet data');
       }
 
+      // CRITICAL: Fetch REAL on-chain balance instead of using database amount
+      const onChainBalance = await this.walletManager.getTokenBalance(
+        walletData.publicAddress,
+        position.tokenAddress,
+        false // Don't use cache - we need fresh data
+      );
+
+      // If no tokens on-chain, cancel the order and clean up
+      if (!onChainBalance || onChainBalance.amount <= 0) {
+        console.log(`Order ${order.id}: No tokens on-chain, cancelling`);
+        await this.db.updateLimitOrderStatus(order.id, 'cancelled');
+        await this.db.deletePosition(order.userId, position.tokenAddress);
+        return;
+      }
+
       // Get keypair for signing
       const keypair = this.walletManager.getKeypair(walletData);
 
-      // Calculate amount to sell
-      const sellAmount = (position.amount * order.sellPercentage) / 100;
+      // Use on-chain balance for sell calculation
+      const sellAmount = (onChainBalance.amount * order.sellPercentage) / 100;
+      const decimals = onChainBalance.decimals;
+
+      // Log if there's a mismatch between DB and on-chain
+      if (Math.abs(position.amount - onChainBalance.amount) > 0.01) {
+        console.log(`SL/TP balance mismatch: DB=${position.amount}, On-chain=${onChainBalance.amount}`);
+      }
 
       // Execute the sell
       const result = await this.router.sell(
         position.tokenAddress,
         sellAmount,
-        tokenInfo.decimals,
+        decimals, // Use on-chain decimals
         keypair,
         {
           slippageBps: 1000, // Higher slippage for fast execution
@@ -246,19 +268,31 @@ export class PriceMonitor {
       // Update order status
       await this.db.updateLimitOrderStatus(order.id, 'triggered');
 
-      // Update position amount
-      const newAmount = position.amount - sellAmount;
-      if (newAmount <= 0) {
-        // Position fully closed
+      // Invalidate cache after sell
+      this.walletManager.invalidateTokenBalanceCache(walletData.publicAddress, position.tokenAddress);
+
+      // Wait briefly for chain state to settle
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Fetch actual remaining balance from chain (not calculated from DB)
+      const remainingBalance = await this.walletManager.getTokenBalance(
+        walletData.publicAddress,
+        position.tokenAddress,
+        false
+      );
+
+      // Update or delete position based on actual on-chain balance
+      if (!remainingBalance || remainingBalance.amount <= 0.0001) {
         await this.db.deletePosition(order.userId, position.tokenAddress);
+        // Cancel any other active orders for this position
+        await this.db.cancelOrdersForPosition(position.id);
       } else {
-        // Update position with new amount
         await this.db.upsertPosition({
           userId: position.userId,
           tokenAddress: position.tokenAddress,
           tokenSymbol: position.tokenSymbol,
-          tokenDecimals: position.tokenDecimals,
-          amount: newAmount,
+          tokenDecimals: remainingBalance.decimals,
+          amount: remainingBalance.amount, // Sync with actual on-chain balance
           entryPriceUsd: position.entryPriceUsd,
           entrySol: position.entrySol,
         });

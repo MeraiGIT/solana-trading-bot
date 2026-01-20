@@ -36,6 +36,11 @@ export interface LimitOrder {
   sellPercentage: number;
   status: 'active' | 'triggered' | 'cancelled';
   createdAt: Date;
+  // Optional position info (populated when fetching with position details)
+  tokenAddress?: string;
+  tokenSymbol?: string;
+  entryPriceUsd?: number;
+  positionAmount?: number;
 }
 
 /**
@@ -258,20 +263,60 @@ export class Database {
   // ============================================
 
   /**
-   * Get active limit orders for a user.
+   * Get active limit orders for a user with position details.
    */
   async getActiveLimitOrders(userId: string): Promise<LimitOrder[]> {
-    const { data, error } = await this.client
+    // First get the orders
+    const { data: ordersData, error: ordersError } = await this.client
       .from('tb_limit_orders')
       .select('*')
       .eq('user_id', userId)
       .eq('status', 'active');
 
-    if (error || !data) {
+    if (ordersError || !ordersData || ordersData.length === 0) {
       return [];
     }
 
-    return data.map(this.mapLimitOrderFromDb);
+    // Get unique position IDs
+    const positionIds = [...new Set(ordersData.map((o: { position_id: string }) => o.position_id))];
+
+    // Fetch positions for these orders
+    const { data: positionsData } = await this.client
+      .from('tb_positions')
+      .select('id, token_address, token_symbol, entry_price_usd, amount')
+      .in('id', positionIds);
+
+    // Create position lookup map
+    const positionMap = new Map<string, {
+      tokenAddress: string;
+      tokenSymbol: string | null;
+      entryPriceUsd: number | null;
+      amount: number;
+    }>();
+
+    if (positionsData) {
+      for (const p of positionsData) {
+        positionMap.set(p.id, {
+          tokenAddress: p.token_address,
+          tokenSymbol: p.token_symbol,
+          entryPriceUsd: p.entry_price_usd ? parseFloat(p.entry_price_usd) : null,
+          amount: parseFloat(p.amount) || 0,
+        });
+      }
+    }
+
+    // Map orders with position info
+    return ordersData.map((row: Record<string, unknown>) => {
+      const order = this.mapLimitOrderFromDb(row);
+      const position = positionMap.get(order.positionId);
+      if (position) {
+        order.tokenAddress = position.tokenAddress;
+        order.tokenSymbol = position.tokenSymbol || undefined;
+        order.entryPriceUsd = position.entryPriceUsd || undefined;
+        order.positionAmount = position.amount;
+      }
+      return order;
+    });
   }
 
   /**

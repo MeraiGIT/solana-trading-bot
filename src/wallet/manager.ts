@@ -16,7 +16,9 @@ import {
   Transaction,
   SystemProgram,
   sendAndConfirmTransaction,
+  ParsedAccountData,
 } from '@solana/web3.js';
+import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import * as bip39 from 'bip39';
 import { derivePath } from 'ed25519-hd-key';
 import bs58 from 'bs58';
@@ -49,6 +51,24 @@ export interface WalletData {
 export interface WalletBalance {
   sol: number;
   lamports: number;
+}
+
+/**
+ * SPL Token balance information.
+ */
+export interface TokenBalance {
+  mint: string;           // Token mint address
+  amount: number;         // Human-readable amount (divided by 10^decimals)
+  rawAmount: string;      // Raw amount in smallest units (string to avoid precision loss)
+  decimals: number;       // Token decimals
+}
+
+/**
+ * Cache entry for token balance.
+ */
+interface TokenBalanceCacheEntry {
+  balance: TokenBalance;
+  timestamp: number;
 }
 
 /**
@@ -161,6 +181,8 @@ export function exportToBase58(keypair: Keypair): string {
 export class WalletManager {
   private masterKey: string;
   private connection: Connection;
+  private tokenBalanceCache: Map<string, TokenBalanceCacheEntry> = new Map();
+  private static readonly CACHE_TTL_MS = 5000; // 5 second cache TTL
 
   /**
    * Create a new WalletManager instance.
@@ -424,5 +446,190 @@ export class WalletManager {
     } catch {
       return 0.000005; // Default fallback
     }
+  }
+
+  // ============================================
+  // SPL TOKEN BALANCE OPERATIONS
+  // ============================================
+
+  /**
+   * Get the balance of a specific SPL token for a wallet.
+   * This queries the blockchain directly for accurate balance.
+   *
+   * @param walletAddress - Wallet public address
+   * @param tokenMint - Token mint address
+   * @param useCache - Whether to use cached balance if available (default: true)
+   * @returns Token balance or null if no tokens found
+   */
+  async getTokenBalance(
+    walletAddress: string,
+    tokenMint: string,
+    useCache: boolean = true
+  ): Promise<TokenBalance | null> {
+    const cacheKey = `${walletAddress}:${tokenMint}`;
+
+    // Check cache first
+    if (useCache) {
+      const cached = this.tokenBalanceCache.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < WalletManager.CACHE_TTL_MS) {
+        return cached.balance;
+      }
+    }
+
+    try {
+      const walletPubkey = new PublicKey(walletAddress);
+      const mintPubkey = new PublicKey(tokenMint);
+
+      // Get all token accounts for this wallet filtered by mint
+      const response = await this.connection.getParsedTokenAccountsByOwner(
+        walletPubkey,
+        { mint: mintPubkey }
+      );
+
+      if (response.value.length === 0) {
+        // No token account found - clear cache and return null
+        this.tokenBalanceCache.delete(cacheKey);
+        return null;
+      }
+
+      // There should typically be only one ATA per token
+      const accountInfo = response.value[0].account.data as ParsedAccountData;
+      const parsedInfo = accountInfo.parsed?.info;
+
+      if (!parsedInfo || !parsedInfo.tokenAmount) {
+        return null;
+      }
+
+      const tokenAmount = parsedInfo.tokenAmount;
+      const balance: TokenBalance = {
+        mint: tokenMint,
+        amount: Number(tokenAmount.uiAmount) || 0,
+        rawAmount: tokenAmount.amount || '0',
+        decimals: tokenAmount.decimals || 0,
+      };
+
+      // Update cache
+      this.tokenBalanceCache.set(cacheKey, {
+        balance,
+        timestamp: Date.now(),
+      });
+
+      return balance;
+    } catch (error) {
+      console.error(`Error fetching token balance for ${tokenMint}:`, error);
+
+      // On error, retry once after 1 second
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      try {
+        const walletPubkey = new PublicKey(walletAddress);
+        const mintPubkey = new PublicKey(tokenMint);
+
+        const response = await this.connection.getParsedTokenAccountsByOwner(
+          walletPubkey,
+          { mint: mintPubkey }
+        );
+
+        if (response.value.length === 0) {
+          return null;
+        }
+
+        const accountInfo = response.value[0].account.data as ParsedAccountData;
+        const parsedInfo = accountInfo.parsed?.info;
+
+        if (!parsedInfo || !parsedInfo.tokenAmount) {
+          return null;
+        }
+
+        const tokenAmount = parsedInfo.tokenAmount;
+        return {
+          mint: tokenMint,
+          amount: Number(tokenAmount.uiAmount) || 0,
+          rawAmount: tokenAmount.amount || '0',
+          decimals: tokenAmount.decimals || 0,
+        };
+      } catch (retryError) {
+        console.error(`Retry also failed for token balance:`, retryError);
+        return null;
+      }
+    }
+  }
+
+  /**
+   * Get all SPL token balances for a wallet.
+   * Useful for displaying positions view.
+   *
+   * @param walletAddress - Wallet public address
+   * @returns Array of all token balances
+   */
+  async getAllTokenBalances(walletAddress: string): Promise<TokenBalance[]> {
+    try {
+      const walletPubkey = new PublicKey(walletAddress);
+
+      // Get all token accounts for this wallet
+      const response = await this.connection.getParsedTokenAccountsByOwner(
+        walletPubkey,
+        { programId: TOKEN_PROGRAM_ID }
+      );
+
+      const balances: TokenBalance[] = [];
+
+      for (const account of response.value) {
+        const accountInfo = account.account.data as ParsedAccountData;
+        const parsedInfo = accountInfo.parsed?.info;
+
+        if (!parsedInfo || !parsedInfo.tokenAmount) {
+          continue;
+        }
+
+        const tokenAmount = parsedInfo.tokenAmount;
+        const amount = Number(tokenAmount.uiAmount) || 0;
+
+        // Skip zero balances
+        if (amount <= 0) {
+          continue;
+        }
+
+        const balance: TokenBalance = {
+          mint: parsedInfo.mint,
+          amount,
+          rawAmount: tokenAmount.amount || '0',
+          decimals: tokenAmount.decimals || 0,
+        };
+
+        balances.push(balance);
+
+        // Update cache for each token
+        const cacheKey = `${walletAddress}:${parsedInfo.mint}`;
+        this.tokenBalanceCache.set(cacheKey, {
+          balance,
+          timestamp: Date.now(),
+        });
+      }
+
+      return balances;
+    } catch (error) {
+      console.error(`Error fetching all token balances:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Invalidate cached balance for a specific token.
+   * Call this after buy/sell operations.
+   *
+   * @param walletAddress - Wallet public address
+   * @param tokenMint - Token mint address
+   */
+  invalidateTokenBalanceCache(walletAddress: string, tokenMint: string): void {
+    const cacheKey = `${walletAddress}:${tokenMint}`;
+    this.tokenBalanceCache.delete(cacheKey);
+  }
+
+  /**
+   * Clear all cached token balances.
+   */
+  clearTokenBalanceCache(): void {
+    this.tokenBalanceCache.clear();
   }
 }

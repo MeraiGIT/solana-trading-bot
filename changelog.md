@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.4.0] - 2026-01-20
+
+### Changed
+- **CRITICAL: On-Chain Data Integration** - Database is now metadata-only storage
+  - All token balances now fetched directly from blockchain via SPL Token queries
+  - Fixes 100% sell failures caused by DB-to-chain balance drift (error 0x1788)
+  - Example: DB showed 59.63 tokens, on-chain had 58.98 tokens - now uses on-chain
+
+### Added
+- **SPL Token Balance Queries** (`src/wallet/manager.ts`)
+  - Added `@solana/spl-token` dependency
+  - New `getTokenBalance(walletAddress, tokenMint)` method
+  - New `getAllTokenBalances(walletAddress)` method
+  - 5-second cache with `invalidateTokenBalanceCache()` for post-trade refresh
+  - Retry logic with 1-second delay on RPC failures
+
+- **Post-Trade Verification**
+  - Buy: Waits 2s, queries on-chain balance, stores verified amount (not Jupiter estimate)
+  - Sell: Waits 2s, syncs DB with actual remaining balance
+  - Logs discrepancies between expected and actual amounts
+
+### Fixed
+- **handleSell()** (`src/bot/commands/trade.ts`)
+  - Now uses on-chain balance instead of database amount for sell calculations
+  - Auto-cleans stale positions when on-chain balance is 0
+  - Shows warning when balance synced from blockchain
+
+- **triggerOrder()** (`src/trading/priceMonitor.ts`)
+  - SL/TP orders now use real on-chain balance
+  - Cancels orders and cleans positions when no tokens on-chain
+  - Post-trigger balance sync with chain
+
+- **showPositions()** (`src/bot/commands/trade.ts`)
+  - Displays real on-chain balances
+  - Shows sync indicator when DB differs from chain
+  - Auto-removes positions with zero on-chain balance
+  - Added "Refresh" button
+
+- **showSellOptions()** (`src/bot/commands/trade.ts`)
+  - Shows actual on-chain holdings
+  - Cleans up stale positions automatically
+  - Warning displayed when balance synced
+
+### Database Role Change
+- **Before:** Source of truth for token amounts
+- **After:** Metadata storage only (entry price, timestamp, symbol)
+- Token balances always fetched fresh from blockchain for critical operations
+
+---
+
 ## [0.3.2] - 2026-01-20
 
 ### Fixed

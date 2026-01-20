@@ -1,9 +1,9 @@
 # Project Status - Solana Trading Bot
 
 > **Last Updated**: 2026-01-20
-> **Current Version**: 0.3.2
-> **Current Phase**: Phase 5 - Production Hardening
-> **Overall Progress**: 95%
+> **Current Version**: 0.4.0
+> **Current Phase**: Phase 6 - On-Chain Data Integration
+> **Overall Progress**: 98%
 
 ---
 
@@ -16,7 +16,8 @@
 | 3 | MEV Protection | **COMPLETE** | 100% |
 | 4 | Position Management | **COMPLETE** | 100% |
 | 5 | Production Hardening | **COMPLETE** | 100% |
-| 6 | Copy Trading Migration | Not Started | 0% |
+| 6 | On-Chain Data Integration | **COMPLETE** | 100% |
+| 7 | Copy Trading Migration | Not Started | 0% |
 
 ---
 
@@ -168,16 +169,67 @@ src/trading/
 
 ---
 
+## Phase 6: On-Chain Data Integration (COMPLETE)
+
+### Problem Solved
+- Database stored expected token amounts from Jupiter swaps
+- Due to fees, slippage, and rounding errors, DB drifted from actual on-chain balances
+- Example: DB showed 59.63 tokens, on-chain had 58.98 tokens
+- 100% sells failed with error 0x1788 (insufficient balance)
+
+### Solution Implemented
+- [x] Added `@solana/spl-token` dependency
+- [x] Created `getTokenBalance()` in WalletManager
+- [x] Created `getAllTokenBalances()` for positions view
+- [x] Added 5-second cache with invalidation
+- [x] Fixed `handleSell()` to use on-chain balance
+- [x] Fixed `triggerOrder()` for SL/TP execution
+- [x] Updated `showPositions()` to display real balances
+- [x] Updated `showSellOptions()` to display real balances
+- [x] Added post-buy verification (sync DB with chain)
+- [x] Added post-sell balance sync
+
+### Database Role Change
+- **Before**: Source of truth for token amounts
+- **After**: Metadata storage only (entry price, timestamp, symbol)
+- Token balances always fetched from blockchain for critical operations
+
+---
+
 ## Known Issues
 
 1. ~~Price monitor not started automatically~~ **FIXED** - Auto-starts on bot startup
 2. ~~Token amounts showing millions instead of actual~~ **FIXED** - Now divides by 10^decimals
 3. ~~Jupiter API 401 Unauthorized~~ **FIXED** - Added x-api-key header
-4. Need to clear corrupted positions and re-buy after v0.3.2 update (one-time fix)
+4. ~~100% sells failing with 0x1788~~ **FIXED** - Now uses on-chain balance (v0.4.0)
+5. No current known issues
 
 ---
 
 ## Session Log
+
+### 2026-01-20 (Session 6) - On-Chain Data Integration
+- **Critical Fix: 100% Sell Failures**
+  - Root cause: Database stored expected token amounts from Jupiter
+  - Due to swap fees, slippage, and rounding, DB drifted from actual on-chain balances
+  - Example: DB showed 59.63 tokens, but on-chain had 58.98 tokens
+  - 100% sells tried to sell more than available, causing error 0x1788
+- **Solution: On-Chain Balance Queries**
+  - Added `@solana/spl-token` dependency
+  - Created `getTokenBalance()` and `getAllTokenBalances()` in WalletManager
+  - Uses `connection.getParsedTokenAccountsByOwner()` for accurate balances
+  - 5-second cache with invalidation after trades
+  - Retry logic with 1-second delay on RPC failures
+- **Fixed Functions**:
+  - `handleSell()`: Now uses on-chain balance, not DB
+  - `triggerOrder()`: SL/TP orders use on-chain balance
+  - `showPositions()`: Displays real on-chain balances, cleans stale positions
+  - `showSellOptions()`: Shows actual holdings from blockchain
+  - `handleBuy()`: Post-buy verification syncs DB with actual received amount
+- **Database Role Change**:
+  - Database is now metadata-only (entry price, timestamp, symbol)
+  - Token balances always fetched from blockchain for sell operations
+- **Version**: 0.4.0
 
 ### 2026-01-20 (Session 5) - Production Hardening
 - **Comprehensive Codebase Audit**
