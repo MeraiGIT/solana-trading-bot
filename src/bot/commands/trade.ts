@@ -8,6 +8,16 @@ import { DexRouter, TokenInfo, formatPrice, formatNumber } from '../../trading/i
 import { WalletManager } from '../../wallet/manager.js';
 import { appConfig } from '../../utils/env.js';
 
+/**
+ * Escape special Markdown characters to prevent parsing errors.
+ * Use this for any user-controlled or dynamic content in messages.
+ */
+function escapeMarkdown(text: string): string {
+  if (!text) return '';
+  // Escape Markdown special characters: * _ [ ] ( ) ~ ` > # + - = | { } . !
+  return text.replace(/([*_\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
+
 // Create instances
 const walletManager = new WalletManager(
   appConfig.masterEncryptionKey,
@@ -529,8 +539,9 @@ Paste a token address to start trading!
     const pnlPercent = entryPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : 0;
     const pnlEmoji = pnlPercent >= 0 ? '🟢' : '🔴';
     const pnlText = pnlPercent >= 0 ? `+${pnlPercent.toFixed(2)}%` : `${pnlPercent.toFixed(2)}%`;
+    const safeSymbol = escapeMarkdown(pos.tokenSymbol || 'Unknown');
 
-    positionsList += `\n*${pos.tokenSymbol || 'Unknown'}*\n`;
+    positionsList += `\n*${safeSymbol}*\n`;
     positionsList += `  Amount: ${formatNumber(pos.amount)}\n`;
     positionsList += `  Entry: ${formatPrice(entryPrice)}\n`;
     positionsList += `  Current: ${formatPrice(currentPrice)}\n`;
@@ -579,8 +590,9 @@ export async function showSellOptions(ctx: BotContext, tokenAddress: string): Pr
   const entryPrice = position.entryPriceUsd || 0;
   const pnlPercent = entryPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : 0;
 
+  const safeSymbol = escapeMarkdown(position.tokenSymbol || 'Token');
   const message = `
-📤 *Sell ${position.tokenSymbol || 'Token'}*
+📤 *Sell ${safeSymbol}*
 
 *Holdings:* ${formatNumber(position.amount)}
 *Current Price:* ${formatPrice(currentPrice)}
@@ -647,10 +659,11 @@ export async function handleSell(
 
   const sellAmount = (position.amount * percentage) / 100;
   const decimals = position.tokenDecimals || 9;
+  const safeSymbol = escapeMarkdown(position.tokenSymbol || 'tokens');
 
   // Show selling message
   await ctx.editMessageText(
-    `⏳ *Selling ${percentage}%...*\n\nSelling ${formatNumber(sellAmount)} ${position.tokenSymbol || 'tokens'}...\n\n_Please wait..._`,
+    `⏳ *Selling ${percentage}%...*\n\nSelling ${formatNumber(sellAmount)} ${safeSymbol}...\n\n_Please wait..._`,
     { parse_mode: 'Markdown' }
   );
 
@@ -694,7 +707,7 @@ export async function handleSell(
       const successMsg = `
 ✅ *Sell Successful!*
 
-*Sold:* ${formatNumber(sellAmount)} ${position.tokenSymbol || 'tokens'}
+*Sold:* ${formatNumber(sellAmount)} ${safeSymbol}
 *Received:* ${solReceived.toFixed(4)} SOL
 *Via:* ${result.dexUsed === 'jupiter' ? 'Jupiter' : 'PumpPortal'}
 ${result.signature ? `\n[View on Solscan](https://solscan.io/tx/${result.signature})` : ''}
@@ -724,8 +737,9 @@ ${result.signature ? `\n[View on Solscan](https://solscan.io/tx/${result.signatu
         errorMessage: result.error || 'Unknown error',
       });
 
+      const safeError = escapeMarkdown(result.error || 'Transaction failed');
       await ctx.editMessageText(
-        `❌ *Sell Failed*\n\n${result.error || 'Transaction failed'}\n\nPlease try again.`,
+        `❌ *Sell Failed*\n\n${safeError}\n\nPlease try again.`,
         {
           parse_mode: 'Markdown',
           reply_markup: {
@@ -739,8 +753,9 @@ ${result.signature ? `\n[View on Solscan](https://solscan.io/tx/${result.signatu
     }
   } catch (error) {
     console.error('Sell error:', error);
+    const safeErrorMsg = escapeMarkdown((error as Error).message);
     await ctx.editMessageText(
-      `❌ *Error*\n\n${(error as Error).message}`,
+      `❌ *Error*\n\n${safeErrorMsg}`,
       {
         parse_mode: 'Markdown',
         reply_markup: {

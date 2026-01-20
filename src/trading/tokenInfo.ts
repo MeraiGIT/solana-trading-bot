@@ -153,7 +153,8 @@ export class TokenInfoService {
    */
   private pairToTokenInfo(pair: DexScreenerPair): TokenInfo {
     const isPumpFun = pair.dexId?.toLowerCase().includes('pump') ||
-                      pair.url?.toLowerCase().includes('pump.fun');
+                      pair.url?.toLowerCase().includes('pump.fun') ||
+                      pair.baseToken.address.toLowerCase().endsWith('pump');
 
     // PumpFun tokens on bonding curve typically have very low liquidity
     // and dexId contains 'pumpfun' (not 'raydium' after graduation)
@@ -161,15 +162,20 @@ export class TokenInfoService {
                           pair.dexId === 'pumpfun' &&
                           (pair.liquidity?.usd ?? 0) < 100000;
 
+    // Determine decimals:
+    // - PumpFun tokens always use 6 decimals (even after graduation to Raydium)
+    // - USDC/USDT use 6 decimals
+    // - Most other Solana tokens use 9 decimals
+    const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+    const USDT_MINT = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
+    const isStablecoin = pair.baseToken.address === USDC_MINT || pair.baseToken.address === USDT_MINT;
+    const decimals = (isPumpFun || isStablecoin) ? 6 : 9;
+
     return {
       address: pair.baseToken.address,
       symbol: pair.baseToken.symbol,
       name: pair.baseToken.name,
-      // Note: DexScreener doesn't provide decimals. Most Solana tokens use 9.
-      // USDC/USDT use 6. For accurate decimals, would need on-chain fetch.
-      // This is safe because Jupiter returns amounts in raw units and we
-      // convert both ways using the same decimals value.
-      decimals: 9,
+      decimals,
       priceUsd: parseFloat(pair.priceUsd) || 0,
       priceNative: parseFloat(pair.priceNative) || 0,
       liquidity: pair.liquidity?.usd ?? 0,
