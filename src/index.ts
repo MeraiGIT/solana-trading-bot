@@ -97,9 +97,22 @@ bot.catch((err) => {
 console.log('Starting bot...');
 
 bot.start({
-  onStart: (botInfo) => {
+  onStart: async (botInfo) => {
     console.log(`✅ Bot started: @${botInfo.username}`);
     console.log('');
+
+    // Register bot commands for Telegram menu
+    await bot.api.setMyCommands([
+      { command: 'start', description: 'Welcome and setup' },
+      { command: 'wallet', description: 'Manage wallet (deposit, withdraw, export)' },
+      { command: 'trade', description: 'Buy/sell tokens' },
+      { command: 'positions', description: 'View your holdings' },
+      { command: 'orders', description: 'Manage SL/TP orders' },
+      { command: 'history', description: 'Transaction history' },
+      { command: 'settings', description: 'Configure preferences' },
+      { command: 'help', description: 'Get help' },
+    ]);
+    console.log('✅ Bot commands registered');
 
     // Start the price monitor for SL/TP execution
     priceMonitor.start();
