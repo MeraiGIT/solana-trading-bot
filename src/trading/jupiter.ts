@@ -468,10 +468,14 @@ export class JupiterClient {
           preflightCommitment: 'confirmed',
         });
 
+        // Get fresh blockhash for confirmation
+        // Jupiter's blockhash can become stale during retries, causing "block height exceeded" errors
+        // especially with strict RPC providers like Helius
+        const latestBlockhash = await connection.getLatestBlockhash('confirmed');
         const confirmation = await connection.confirmTransaction({
           signature,
-          blockhash: transaction.message.recentBlockhash,
-          lastValidBlockHeight: swapResponse.lastValidBlockHeight,
+          blockhash: latestBlockhash.blockhash,
+          lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
         }, 'confirmed');
 
         if (confirmation.value.err) {
