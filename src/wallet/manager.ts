@@ -18,7 +18,7 @@ import {
   sendAndConfirmTransaction,
   ParsedAccountData,
 } from '@solana/web3.js';
-import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 import * as bip39 from 'bip39';
 import { derivePath } from 'ed25519-hd-key';
 import bs58 from 'bs58';
@@ -197,6 +197,11 @@ export class WalletManager {
 
     this.masterKey = masterKey;
     this.connection = new Connection(rpcUrl, 'confirmed');
+
+    // Log RPC endpoint (hide API key for security)
+    const rpcHost = rpcUrl.includes('?') ? rpcUrl.split('?')[0] : rpcUrl;
+    const isHelius = rpcUrl.includes('helius');
+    console.log(`[WalletManager] Connected to RPC: ${rpcHost}${isHelius ? ' (Helius)' : ''}`);
   }
 
   /**
@@ -327,14 +332,32 @@ export class WalletManager {
    * @param publicAddress - Wallet public address
    * @returns Balance in SOL and lamports
    */
-  async getBalance(publicAddress: string): Promise<WalletBalance> {
+  async getBalance(publicAddress: string, maxRetries: number = 3): Promise<WalletBalance> {
     const publicKey = new PublicKey(publicAddress);
-    const lamports = await this.connection.getBalance(publicKey);
+    let lastError: Error | null = null;
 
-    return {
-      sol: lamports / LAMPORTS_PER_SOL,
-      lamports
-    };
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const lamports = await this.connection.getBalance(publicKey);
+
+        return {
+          sol: lamports / LAMPORTS_PER_SOL,
+          lamports
+        };
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        console.error(`[RPC] getBalance attempt ${attempt}/${maxRetries} failed:`, lastError.message);
+
+        if (attempt < maxRetries) {
+          // Exponential backoff: 1s, 2s, 4s
+          const delay = Math.pow(2, attempt - 1) * 1000;
+          console.log(`[RPC] Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    throw new Error(`Failed to get balance after ${maxRetries} attempts: ${lastError?.message}`);
   }
 
   /**
@@ -557,61 +580,81 @@ export class WalletManager {
 
   /**
    * Get all SPL token balances for a wallet.
-   * Useful for displaying positions view.
+   * Includes both standard SPL tokens AND Token 2022 tokens.
    *
    * @param walletAddress - Wallet public address
    * @returns Array of all token balances
    */
-  async getAllTokenBalances(walletAddress: string): Promise<TokenBalance[]> {
-    try {
-      const walletPubkey = new PublicKey(walletAddress);
+  async getAllTokenBalances(walletAddress: string, maxRetries: number = 3): Promise<TokenBalance[]> {
+    const walletPubkey = new PublicKey(walletAddress);
+    let lastError: Error | null = null;
 
-      // Get all token accounts for this wallet
-      const response = await this.connection.getParsedTokenAccountsByOwner(
-        walletPubkey,
-        { programId: TOKEN_PROGRAM_ID }
-      );
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Query BOTH standard Token Program AND Token 2022 Program
+        const [standardResponse, token2022Response] = await Promise.all([
+          this.connection.getParsedTokenAccountsByOwner(
+            walletPubkey,
+            { programId: TOKEN_PROGRAM_ID }
+          ),
+          this.connection.getParsedTokenAccountsByOwner(
+            walletPubkey,
+            { programId: TOKEN_2022_PROGRAM_ID }
+          )
+        ]);
 
-      const balances: TokenBalance[] = [];
+        const balances: TokenBalance[] = [];
+        const allAccounts = [...standardResponse.value, ...token2022Response.value];
 
-      for (const account of response.value) {
-        const accountInfo = account.account.data as ParsedAccountData;
-        const parsedInfo = accountInfo.parsed?.info;
+        for (const account of allAccounts) {
+          const accountInfo = account.account.data as ParsedAccountData;
+          const parsedInfo = accountInfo.parsed?.info;
 
-        if (!parsedInfo || !parsedInfo.tokenAmount) {
-          continue;
+          if (!parsedInfo || !parsedInfo.tokenAmount) {
+            continue;
+          }
+
+          const tokenAmount = parsedInfo.tokenAmount;
+          const amount = Number(tokenAmount.uiAmount) || 0;
+
+          // Skip zero balances
+          if (amount <= 0) {
+            continue;
+          }
+
+          const balance: TokenBalance = {
+            mint: parsedInfo.mint,
+            amount,
+            rawAmount: tokenAmount.amount || '0',
+            decimals: tokenAmount.decimals || 0,
+          };
+
+          balances.push(balance);
+
+          // Update cache for each token
+          const cacheKey = `${walletAddress}:${parsedInfo.mint}`;
+          this.tokenBalanceCache.set(cacheKey, {
+            balance,
+            timestamp: Date.now(),
+          });
         }
 
-        const tokenAmount = parsedInfo.tokenAmount;
-        const amount = Number(tokenAmount.uiAmount) || 0;
+        return balances;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        console.error(`[RPC] getAllTokenBalances attempt ${attempt}/${maxRetries} failed:`, lastError.message);
 
-        // Skip zero balances
-        if (amount <= 0) {
-          continue;
+        if (attempt < maxRetries) {
+          // Exponential backoff: 1s, 2s, 4s
+          const delay = Math.pow(2, attempt - 1) * 1000;
+          console.log(`[RPC] Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
         }
-
-        const balance: TokenBalance = {
-          mint: parsedInfo.mint,
-          amount,
-          rawAmount: tokenAmount.amount || '0',
-          decimals: tokenAmount.decimals || 0,
-        };
-
-        balances.push(balance);
-
-        // Update cache for each token
-        const cacheKey = `${walletAddress}:${parsedInfo.mint}`;
-        this.tokenBalanceCache.set(cacheKey, {
-          balance,
-          timestamp: Date.now(),
-        });
       }
-
-      return balances;
-    } catch (error) {
-      console.error(`Error fetching all token balances:`, error);
-      return [];
     }
+
+    console.error(`[RPC] Failed to get all token balances after ${maxRetries} attempts`);
+    return []; // Return empty array on complete failure
   }
 
   /**
