@@ -97,14 +97,22 @@ export interface SwapResult {
 /**
  * Jupiter API Client for token swaps
  */
+// Public RPC endpoints for fallback
+const PUBLIC_RPC_ENDPOINTS = [
+  'https://api.mainnet-beta.solana.com',
+  'https://solana-mainnet.g.alchemy.com/v2/demo',
+];
+
 export class JupiterClient {
   private connection: Connection;
+  private publicConnection: Connection;
   private defaultSlippageBps: number;
   private defaultPriorityFee: number;
   private jitoClient: JitoClient | null = null;
   private priorityFeeService: PriorityFeeService;
   private useJito: boolean;
   private apiKey?: string;
+  private rpcName: string;
 
   constructor(
     rpcUrl: string,
@@ -117,12 +125,14 @@ export class JupiterClient {
     }
   ) {
     this.connection = new Connection(rpcUrl, 'confirmed');
+    this.publicConnection = new Connection(PUBLIC_RPC_ENDPOINTS[0], 'confirmed');
     this.defaultSlippageBps = options?.defaultSlippageBps ?? 500; // 5%
     this.defaultPriorityFee = options?.defaultPriorityFee ?? 500000; // 0.0005 SOL - increased for faster confirmation
-    this.useJito = options?.useJito ?? true; // Enable Jito by default
+    this.useJito = options?.useJito ?? true; // Enable Jito as fallback
     this.apiKey = options?.jupiterApiKey;
+    this.rpcName = rpcUrl.includes('helius') ? 'Helius' : 'Primary RPC';
 
-    // Initialize Jito client if enabled
+    // Initialize Jito client if enabled (used as fallback)
     if (this.useJito) {
       this.jitoClient = new JitoClient(rpcUrl);
     }
@@ -259,11 +269,15 @@ export class JupiterClient {
   /**
    * Execute a swap transaction
    *
-   * MEV Protection:
-   * - Uses Jito bundles for private mempool (when enabled)
+   * Execution Order (with fallback):
+   * 1. Try Helius/Primary RPC first (with priority fees)
+   * 2. If fails, try Jito bundles for MEV protection
+   * 3. If fails, try public RPC as last resort
+   *
+   * Features:
    * - Dynamic priority fees based on network conditions
    * - Confirms with 'confirmed' commitment
-   * - Retries with exponential backoff
+   * - Retries with exponential backoff at each tier
    */
   async executeSwap(
     quoteResponse: QuoteResponse,
@@ -275,7 +289,6 @@ export class JupiterClient {
       jitoTip?: number;
     }
   ): Promise<SwapResult> {
-    const maxRetries = options?.maxRetries ?? 3;
     const shouldUseJito = options?.useJito ?? this.useJito;
 
     try {
@@ -285,7 +298,8 @@ export class JupiterClient {
       // Get dynamic priority fee if not specified
       const priorityFee = options?.priorityFee ?? await this.getDynamicPriorityFee(tradeValueSol);
 
-      console.log(`[Jupiter] Trade: ${tradeValueSol.toFixed(4)} SOL, Priority fee: ${priorityFee} lamports, Jito: ${shouldUseJito}`);
+      console.log(`[Jupiter] Trade: ${tradeValueSol.toFixed(4)} SOL, Priority fee: ${priorityFee} lamports`);
+      console.log(`[Jupiter] Execution order: ${this.rpcName} → ${shouldUseJito ? 'Jito → ' : ''}Public RPC`);
 
       // Build the swap transaction
       const swapResponse = await this.buildSwapTransaction({
@@ -307,20 +321,32 @@ export class JupiterClient {
         };
       }
 
-      // Decode and sign the transaction
-      const swapTransactionBuf = Buffer.from(swapResponse.swapTransaction, 'base64');
-      const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-      transaction.sign([keypair]);
+      // ========== TIER 1: Try Helius/Primary RPC first ==========
+      console.log(`[Jupiter] Tier 1: Trying ${this.rpcName}...`);
+      const tier1Result = await this.sendWithConnection(
+        this.connection,
+        quoteResponse,
+        keypair,
+        priorityFee,
+        2 // 2 retries for primary
+      );
 
-      // Try Jito first if enabled
+      if (tier1Result.success) {
+        console.log(`[Jupiter] ✅ ${this.rpcName} succeeded: ${tier1Result.signature}`);
+        return tier1Result;
+      }
+
+      console.log(`[Jupiter] ${this.rpcName} failed: ${tier1Result.error}`);
+
+      // ========== TIER 2: Try Jito bundles ==========
       if (shouldUseJito && this.jitoClient) {
+        console.log(`[Jupiter] Tier 2: Trying Jito bundles...`);
+
         try {
-          // Get Jito tip (use provided, or calculate based on trade value, or fetch floor)
+          // Get Jito tip
           let jitoTip = options?.jitoTip;
           if (!jitoTip) {
-            // Use trade-value-based tip for better inclusion
             jitoTip = JitoClient.calculateRecommendedTip(tradeValueSol);
-            // Also check floor and use higher of the two
             try {
               const floor = await getJitoTipFloor();
               jitoTip = Math.max(jitoTip, floor);
@@ -329,107 +355,69 @@ export class JupiterClient {
             }
           }
 
-          console.log(`[Jupiter] Sending via Jito with ${jitoTip} lamport tip`);
-
-          const jitoResult = await this.jitoClient.sendTransaction(
-            transaction,
-            keypair,
-            {
-              tipLamports: jitoTip,
-              waitForConfirmation: true,
-              maxWaitMs: 15000, // Reduced from 30s for faster fallback
-            }
-          );
-
-          if (jitoResult.success && jitoResult.landed) {
-            console.log(`[Jupiter] Jito bundle landed: ${jitoResult.bundleId}`);
-            return {
-              success: true,
-              signature: jitoResult.signature,
-              inputAmount: quoteResponse.inAmount,
-              outputAmount: quoteResponse.outAmount,
-              priceImpact: quoteResponse.priceImpactPct,
-            };
-          }
-
-          // Jito failed, fall back to regular submission
-          console.log(`[Jupiter] Jito failed (${jitoResult.error}), falling back to regular submission`);
-        } catch (jitoErr) {
-          console.log(`[Jupiter] Jito error: ${(jitoErr as Error).message}, falling back to regular submission`);
-        }
-      }
-
-      // Regular submission (fallback or when Jito disabled)
-      let signature: string | undefined;
-      let lastError: Error | undefined;
-
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-          // Always get fresh transaction on each attempt (especially important after Jito fallback)
-          let txToSend = transaction;
-          let blockhashToConfirm = transaction.message.recentBlockhash;
-          let lastValidHeight = swapResponse.lastValidBlockHeight;
-
-          // If this is a retry OR we're falling back from Jito, rebuild with fresh blockhash
-          if (attempt > 0 || (shouldUseJito && this.jitoClient)) {
-            console.log(`[Jupiter] Attempt ${attempt + 1}: Rebuilding transaction with fresh blockhash`);
-            try {
-              const freshSwapResponse = await this.buildSwapTransaction({
-                quoteResponse,
-                userPublicKey: keypair.publicKey.toBase58(),
-                prioritizationFeeLamports: priorityFee,
-              });
-
-              if (freshSwapResponse.simulationError) {
-                throw new Error(`Simulation failed: ${freshSwapResponse.simulationError}`);
-              }
-
-              const freshTxBuf = Buffer.from(freshSwapResponse.swapTransaction, 'base64');
-              txToSend = VersionedTransaction.deserialize(freshTxBuf);
-              txToSend.sign([keypair]);
-              blockhashToConfirm = txToSend.message.recentBlockhash;
-              lastValidHeight = freshSwapResponse.lastValidBlockHeight;
-            } catch (rebuildErr) {
-              console.log(`[Jupiter] Failed to rebuild: ${(rebuildErr as Error).message}`);
-              throw rebuildErr;
-            }
-          }
-
-          signature = await this.connection.sendTransaction(txToSend, {
-            skipPreflight: false,
-            maxRetries: 0,
-            preflightCommitment: 'confirmed',
+          // Build fresh transaction for Jito
+          const jitoSwapResponse = await this.buildSwapTransaction({
+            quoteResponse,
+            userPublicKey: keypair.publicKey.toBase58(),
+            prioritizationFeeLamports: priorityFee,
           });
 
-          const confirmation = await this.connection.confirmTransaction({
-            signature,
-            blockhash: blockhashToConfirm,
-            lastValidBlockHeight: lastValidHeight,
-          }, 'confirmed');
+          if (!jitoSwapResponse.simulationError) {
+            const jitoTxBuf = Buffer.from(jitoSwapResponse.swapTransaction, 'base64');
+            const jitoTx = VersionedTransaction.deserialize(jitoTxBuf);
+            jitoTx.sign([keypair]);
 
-          if (confirmation.value.err) {
-            throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+            console.log(`[Jupiter] Sending via Jito with ${jitoTip} lamport tip`);
+
+            const jitoResult = await this.jitoClient.sendTransaction(
+              jitoTx,
+              keypair,
+              {
+                tipLamports: jitoTip,
+                waitForConfirmation: true,
+                maxWaitMs: 15000,
+              }
+            );
+
+            if (jitoResult.success && jitoResult.landed) {
+              console.log(`[Jupiter] ✅ Jito bundle landed: ${jitoResult.bundleId}`);
+              return {
+                success: true,
+                signature: jitoResult.signature,
+                inputAmount: quoteResponse.inAmount,
+                outputAmount: quoteResponse.outAmount,
+                priceImpact: quoteResponse.priceImpactPct,
+              };
+            }
+
+            console.log(`[Jupiter] Jito failed: ${jitoResult.error}`);
           }
-
-          return {
-            success: true,
-            signature,
-            inputAmount: quoteResponse.inAmount,
-            outputAmount: quoteResponse.outAmount,
-            priceImpact: quoteResponse.priceImpactPct,
-          };
-        } catch (err) {
-          lastError = err as Error;
-
-          if (attempt < maxRetries - 1) {
-            await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
-          }
+        } catch (jitoErr) {
+          console.log(`[Jupiter] Jito error: ${(jitoErr as Error).message}`);
         }
       }
 
+      // ========== TIER 3: Try Public RPC as last resort ==========
+      console.log(`[Jupiter] Tier 3: Trying public RPC...`);
+      const tier3Result = await this.sendWithConnection(
+        this.publicConnection,
+        quoteResponse,
+        keypair,
+        priorityFee,
+        2 // 2 retries for public
+      );
+
+      if (tier3Result.success) {
+        console.log(`[Jupiter] ✅ Public RPC succeeded: ${tier3Result.signature}`);
+        return tier3Result;
+      }
+
+      console.log(`[Jupiter] Public RPC failed: ${tier3Result.error}`);
+
+      // All tiers failed
       return {
         success: false,
-        error: lastError?.message || 'Unknown error',
+        error: `All execution methods failed. Last error: ${tier3Result.error}`,
         inputAmount: quoteResponse.inAmount,
         outputAmount: quoteResponse.outAmount,
         priceImpact: quoteResponse.priceImpactPct,
@@ -443,6 +431,75 @@ export class JupiterClient {
         priceImpact: quoteResponse.priceImpactPct,
       };
     }
+  }
+
+  /**
+   * Helper: Send transaction via a specific connection with retries
+   */
+  private async sendWithConnection(
+    connection: Connection,
+    quoteResponse: QuoteResponse,
+    keypair: Keypair,
+    priorityFee: number,
+    maxRetries: number
+  ): Promise<SwapResult> {
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        // Build fresh transaction for each attempt
+        const swapResponse = await this.buildSwapTransaction({
+          quoteResponse,
+          userPublicKey: keypair.publicKey.toBase58(),
+          prioritizationFeeLamports: priorityFee,
+        });
+
+        if (swapResponse.simulationError) {
+          throw new Error(`Simulation failed: ${swapResponse.simulationError}`);
+        }
+
+        const txBuf = Buffer.from(swapResponse.swapTransaction, 'base64');
+        const transaction = VersionedTransaction.deserialize(txBuf);
+        transaction.sign([keypair]);
+
+        const signature = await connection.sendTransaction(transaction, {
+          skipPreflight: false,
+          maxRetries: 0,
+          preflightCommitment: 'confirmed',
+        });
+
+        const confirmation = await connection.confirmTransaction({
+          signature,
+          blockhash: transaction.message.recentBlockhash,
+          lastValidBlockHeight: swapResponse.lastValidBlockHeight,
+        }, 'confirmed');
+
+        if (confirmation.value.err) {
+          throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+        }
+
+        return {
+          success: true,
+          signature,
+          inputAmount: quoteResponse.inAmount,
+          outputAmount: quoteResponse.outAmount,
+          priceImpact: quoteResponse.priceImpactPct,
+        };
+      } catch (err) {
+        lastError = err as Error;
+        if (attempt < maxRetries - 1) {
+          await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+        }
+      }
+    }
+
+    return {
+      success: false,
+      error: lastError?.message || 'Unknown error',
+      inputAmount: quoteResponse.inAmount,
+      outputAmount: quoteResponse.outAmount,
+      priceImpact: quoteResponse.priceImpactPct,
+    };
   }
 
   /**

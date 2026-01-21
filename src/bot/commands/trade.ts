@@ -619,9 +619,13 @@ _No wallet found. Use /wallet to create one._
     dbPositionMap.delete(token.mint);
   }
 
-  // Clean up DB positions that no longer exist on-chain
-  for (const [tokenAddress] of dbPositionMap) {
-    await db.deletePosition(userId, tokenAddress);
+  // NOTE: We no longer auto-delete DB positions that aren't found on-chain.
+  // This was causing data loss when RPC had temporary issues.
+  // Users can manually remove stale positions if needed.
+  // Log stale positions for debugging.
+  if (dbPositionMap.size > 0) {
+    const staleAddresses = Array.from(dbPositionMap.keys());
+    console.log(`Found ${staleAddresses.length} DB positions not on-chain (not deleting):`, staleAddresses.map(a => a.slice(0, 8) + '...'));
   }
 
   if (displayPositions.length === 0) {
@@ -714,15 +718,21 @@ export async function showSellOptions(ctx: BotContext, tokenAddress: string): Pr
   }
 
   // Fetch real on-chain balance
-  const onChainBalance = await walletManager.getTokenBalance(
-    wallet.publicAddress,
-    tokenAddress
-  );
+  let onChainBalance;
+  try {
+    onChainBalance = await walletManager.getTokenBalance(
+      wallet.publicAddress,
+      tokenAddress
+    );
+  } catch (error) {
+    console.error('Error fetching on-chain balance:', error);
+    // Use database amount as fallback instead of erroring out
+    onChainBalance = { amount: position.amount, decimals: position.tokenDecimals || 9 };
+  }
 
-  // If no tokens on-chain, clean up stale position
+  // If no tokens on-chain, warn but DON'T delete position automatically
   if (!onChainBalance || onChainBalance.amount <= 0) {
-    await db.deletePosition(userId, tokenAddress);
-    await sendError(ctx, 'No tokens found on-chain. Position has been removed.');
+    await sendError(ctx, 'No tokens found on-chain. If you believe this is an error, refresh and try again.');
     return;
   }
 
@@ -810,16 +820,24 @@ export async function handleSell(
   }
 
   // CRITICAL: Fetch REAL on-chain balance instead of using database amount
-  const onChainBalance = await walletManager.getTokenBalance(
-    wallet.publicAddress,
-    tokenAddress,
-    false // Don't use cache - we need fresh data for sells
-  );
+  let onChainBalance;
+  try {
+    onChainBalance = await walletManager.getTokenBalance(
+      wallet.publicAddress,
+      tokenAddress,
+      false // Don't use cache - we need fresh data for sells
+    );
+  } catch (error) {
+    // Network error - don't delete position, just report error
+    console.error('Error fetching on-chain balance for sell:', error);
+    await sendError(ctx, 'Failed to fetch on-chain balance. Please try again.');
+    return;
+  }
 
-  // If no tokens on-chain, clean up stale position
+  // If no tokens on-chain, warn but DON'T delete position automatically
+  // (user might have network issues or RPC might be stale)
   if (!onChainBalance || onChainBalance.amount <= 0) {
-    await db.deletePosition(userId, tokenAddress);
-    await sendError(ctx, 'No tokens found on-chain. Position has been cleaned up.');
+    await sendError(ctx, 'No tokens found on-chain. If you believe this is an error, check your wallet on Solscan.');
     return;
   }
 
