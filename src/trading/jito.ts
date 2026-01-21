@@ -93,9 +93,10 @@ export class JitoClient {
       this.endpoints = [preferred, ...this.endpoints.filter(e => e !== preferred)];
     }
 
-    // Default tip: 5,000,000 lamports (0.005 SOL) - competitive with professional bots
-    // BullX uses 0.01-0.05 SOL, we use 0.005 as baseline
-    this.tipLamports = config?.tipLamports ?? 5_000_000;
+    // Default tip: 50,000 lamports (0.00005 SOL) - competitive but not excessive
+    // Actual competitive range: 10,000-50,000 lamports (~$0.002-0.01)
+    // Only MEV sniping needs 0.01+ SOL tips
+    this.tipLamports = config?.tipLamports ?? 50_000;
     this.maxRetries = config?.maxRetries ?? 2;
     this.retryDelayMs = config?.retryDelayMs ?? 300; // Fast retry
     this.useParallelSubmission = true; // Enable parallel submission by default
@@ -529,39 +530,41 @@ export class JitoClient {
   /**
    * Calculate recommended tip based on trade value
    *
-   * IMPORTANT: Tips are 100x higher than before to compete with professional bots
-   * BullX uses 0.01-0.05 SOL tips for competitive sniping
-   * Trojan uses "turbo mode" with higher gas
+   * CORRECTED: Based on actual Jito tip market data:
+   * - Minimum: 1,000 lamports (0.000001 SOL)
+   * - Competitive: 10,000-50,000 lamports (0.00001-0.00005 SOL)
+   * - High tips (0.01+ SOL) are only for MEV sniping/arbitrage
    *
-   * Higher value trades should use higher tips for faster inclusion
+   * Trojan/BonkBot charge 1% platform fee, but network costs are minimal
    */
   static calculateRecommendedTip(tradeValueSol: number): number {
     if (tradeValueSol < 0.1) {
-      return 3_000_000; // 0.003 SOL (~$0.60)
+      return 20_000; // 0.00002 SOL (~$0.004)
     } else if (tradeValueSol < 0.5) {
-      return 5_000_000; // 0.005 SOL (~$1.00)
+      return 30_000; // 0.00003 SOL (~$0.006)
     } else if (tradeValueSol < 1) {
-      return 7_500_000; // 0.0075 SOL (~$1.50)
+      return 50_000; // 0.00005 SOL (~$0.01)
     } else if (tradeValueSol < 5) {
-      return 10_000_000; // 0.01 SOL (~$2.00)
+      return 100_000; // 0.0001 SOL (~$0.02)
     } else {
-      return 15_000_000; // 0.015 SOL (~$3.00)
+      return 200_000; // 0.0002 SOL (~$0.04)
     }
   }
 
   /**
    * Calculate tip for turbo/urgent mode (sniping, time-sensitive trades)
-   * These are aggressive tips for maximum speed
+   * These are higher tips for faster inclusion during congestion
+   * Still much lower than MEV arbitrage tips
    */
   static calculateTurboTip(tradeValueSol: number): number {
     if (tradeValueSol < 0.5) {
-      return 10_000_000; // 0.01 SOL (~$2.00)
+      return 100_000; // 0.0001 SOL (~$0.02)
     } else if (tradeValueSol < 1) {
-      return 20_000_000; // 0.02 SOL (~$4.00)
+      return 200_000; // 0.0002 SOL (~$0.04)
     } else if (tradeValueSol < 5) {
-      return 30_000_000; // 0.03 SOL (~$6.00)
+      return 500_000; // 0.0005 SOL (~$0.10)
     } else {
-      return 50_000_000; // 0.05 SOL (~$10.00)
+      return 1_000_000; // 0.001 SOL (~$0.20) - max for normal trading
     }
   }
 }

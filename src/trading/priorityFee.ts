@@ -172,16 +172,16 @@ export class PriorityFeeService {
   /**
    * Get default fees when APIs fail
    *
-   * NOTE: Fees increased 10x to be competitive with professional bots
-   * BullX uses 0.01-0.05 SOL tips, Trojan uses "turbo mode" with high gas
+   * CORRECTED: Based on actual Solana priority fee market
+   * These are priority fees (compute unit price), separate from Jito tips
    */
   private getDefaultFees(): PriorityFeeEstimate {
     return {
-      low: 100_000,       // 0.0001 SOL
-      medium: 500_000,    // 0.0005 SOL
-      high: 1_000_000,    // 0.001 SOL
-      veryHigh: 5_000_000, // 0.005 SOL
-      unsafeMax: 10_000_000, // 0.01 SOL
+      low: 1_000,        // 0.000001 SOL - minimal
+      medium: 10_000,    // 0.00001 SOL - normal
+      high: 50_000,      // 0.00005 SOL - faster
+      veryHigh: 100_000, // 0.0001 SOL - urgent
+      unsafeMax: 500_000, // 0.0005 SOL - max reasonable
     };
   }
 
@@ -232,9 +232,6 @@ export class PriorityFeeService {
   /**
    * Calculate priority fee based on trade value and urgency
    *
-   * NOTE: Multipliers increased to be competitive with professional bots
-   * Memecoin trading requires aggressive fees for reliable execution
-   *
    * @param tradeValueSol - Value of trade in SOL
    * @param urgency - How urgent (1-10, 10 being most urgent)
    */
@@ -259,21 +256,20 @@ export class PriorityFeeService {
       baseFee = estimates.unsafeMax;
     }
 
-    // Scale up more aggressively for higher value trades (MEV targets)
-    // High value trades are more likely to be MEV'd
+    // Modest scale up for higher value trades
     let multiplier = 1;
     if (tradeValueSol > 10) {
-      multiplier = 3; // Was 2
+      multiplier = 2;
     } else if (tradeValueSol > 5) {
-      multiplier = 2; // Was 1.5
+      multiplier = 1.5;
     } else if (tradeValueSol > 1) {
-      multiplier = 1.5; // Was 1.2
+      multiplier = 1.2;
     }
 
     const finalFee = Math.ceil(baseFee * multiplier);
 
-    // Cap at 0.02 SOL (increased from 0.01 SOL for competitive execution)
-    const maxFee = 20_000_000; // 0.02 SOL
+    // Cap at 0.001 SOL - reasonable max for normal trading
+    const maxFee = 1_000_000; // 0.001 SOL
     return Math.min(finalFee, maxFee);
   }
 }

@@ -142,8 +142,8 @@ export class JupiterClient {
     this.connection = new Connection(rpcUrl, 'confirmed');
     this.publicConnection = new Connection(PUBLIC_RPC_ENDPOINTS[0], 'confirmed');
     this.defaultSlippageBps = options?.defaultSlippageBps ?? 500; // 5%
-    // Increased default priority fee to be competitive
-    this.defaultPriorityFee = options?.defaultPriorityFee ?? 1_000_000; // 0.001 SOL
+    // Reasonable default priority fee
+    this.defaultPriorityFee = options?.defaultPriorityFee ?? 50_000; // 0.00005 SOL (~$0.01)
     this.useJito = options?.useJito ?? true; // Enable Jito (now PRIMARY, not fallback)
     this.apiKey = options?.jupiterApiKey;
     this.rpcName = rpcUrl.includes('helius') ? 'Helius' : 'Primary RPC';
