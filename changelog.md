@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.4.2] - 2026-01-21
+
+### Fixed
+- **CRITICAL: /positions missing tokens** (`src/bot/commands/trade.ts`)
+  - /positions now reconciles on-chain balances with database positions
+  - Previously, positions could silently disappear if an on-chain balance check failed
+  - Now fetches ALL on-chain token balances first, then matches with DB
+  - Auto-creates missing DB positions for tokens found on-chain (marked with 🆕)
+  - Syncs DB amounts with actual on-chain balances
+  - Only deletes DB positions when tokens are truly gone from blockchain
+  - Fixes issue where GRIFFAIN was missing but Fartcoin showed correctly
+
+---
+
 ## [0.4.1] - 2026-01-20
 
 ### Fixed
