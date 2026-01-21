@@ -95,6 +95,19 @@ export interface SwapResult {
 }
 
 /**
+ * Execution mode for trades
+ *
+ * TURBO: Jito-only, skip confirmation, fastest possible (~1-2s)
+ * FAST: Jito-first with 5s confirmation, RPC fallback (~2-5s)
+ * SAFE: Current behavior with longer timeouts (~30-60s)
+ */
+export enum ExecutionMode {
+  TURBO = 'turbo',
+  FAST = 'fast',
+  SAFE = 'safe',
+}
+
+/**
  * Jupiter API Client for token swaps
  */
 // Public RPC endpoints for fallback
@@ -113,6 +126,7 @@ export class JupiterClient {
   private useJito: boolean;
   private apiKey?: string;
   private rpcName: string;
+  private defaultExecutionMode: ExecutionMode;
 
   constructor(
     rpcUrl: string,
@@ -122,17 +136,21 @@ export class JupiterClient {
       useJito?: boolean;
       heliusApiKey?: string;
       jupiterApiKey?: string;
+      executionMode?: ExecutionMode;
     }
   ) {
     this.connection = new Connection(rpcUrl, 'confirmed');
     this.publicConnection = new Connection(PUBLIC_RPC_ENDPOINTS[0], 'confirmed');
     this.defaultSlippageBps = options?.defaultSlippageBps ?? 500; // 5%
-    this.defaultPriorityFee = options?.defaultPriorityFee ?? 500000; // 0.0005 SOL - increased for faster confirmation
-    this.useJito = options?.useJito ?? true; // Enable Jito as fallback
+    // Increased default priority fee to be competitive
+    this.defaultPriorityFee = options?.defaultPriorityFee ?? 1_000_000; // 0.001 SOL
+    this.useJito = options?.useJito ?? true; // Enable Jito (now PRIMARY, not fallback)
     this.apiKey = options?.jupiterApiKey;
     this.rpcName = rpcUrl.includes('helius') ? 'Helius' : 'Primary RPC';
+    // Default to FAST mode for better speed
+    this.defaultExecutionMode = options?.executionMode ?? ExecutionMode.FAST;
 
-    // Initialize Jito client if enabled (used as fallback)
+    // Initialize Jito client if enabled (now PRIMARY execution method)
     if (this.useJito) {
       this.jitoClient = new JitoClient(rpcUrl);
     }
@@ -269,15 +287,15 @@ export class JupiterClient {
   /**
    * Execute a swap transaction
    *
-   * Execution Order (with fallback):
-   * 1. Try Helius/Primary RPC first (with priority fees)
-   * 2. If fails, try Jito bundles for MEV protection
-   * 3. If fails, try public RPC as last resort
+   * NEW Execution Order (Jito-first for speed):
+   * - TURBO: Jito only, no confirmation wait (~1-2s)
+   * - FAST: Jito first (5s), then RPC fallback (~2-5s)
+   * - SAFE: Old behavior with longer timeouts (~30-60s)
    *
    * Features:
-   * - Dynamic priority fees based on network conditions
-   * - Confirms with 'confirmed' commitment
-   * - Retries with exponential backoff at each tier
+   * - Parallel Jito submission to all block engines
+   * - Competitive tips (100x higher than before)
+   * - Short timeouts with automatic retry
    */
   async executeSwap(
     quoteResponse: QuoteResponse,
@@ -287,8 +305,10 @@ export class JupiterClient {
       maxRetries?: number;
       useJito?: boolean;
       jitoTip?: number;
+      executionMode?: ExecutionMode;
     }
   ): Promise<SwapResult> {
+    const mode = options?.executionMode ?? this.defaultExecutionMode;
     const shouldUseJito = options?.useJito ?? this.useJito;
 
     try {
@@ -298,8 +318,8 @@ export class JupiterClient {
       // Get dynamic priority fee if not specified
       const priorityFee = options?.priorityFee ?? await this.getDynamicPriorityFee(tradeValueSol);
 
-      console.log(`[Jupiter] Trade: ${tradeValueSol.toFixed(4)} SOL, Priority fee: ${priorityFee} lamports`);
-      console.log(`[Jupiter] Execution order: ${this.rpcName} → ${shouldUseJito ? 'Jito → ' : ''}Public RPC`);
+      console.log(`[Jupiter] Trade: ${tradeValueSol.toFixed(4)} SOL, Mode: ${mode.toUpperCase()}`);
+      console.log(`[Jupiter] Priority fee: ${priorityFee} lamports`);
 
       // Build the swap transaction
       const swapResponse = await this.buildSwapTransaction({
@@ -321,32 +341,19 @@ export class JupiterClient {
         };
       }
 
-      // ========== TIER 1: Try Helius/Primary RPC first ==========
-      console.log(`[Jupiter] Tier 1: Trying ${this.rpcName}...`);
-      const tier1Result = await this.sendWithConnection(
-        this.connection,
-        quoteResponse,
-        keypair,
-        priorityFee,
-        2 // 2 retries for primary
-      );
-
-      if (tier1Result.success) {
-        console.log(`[Jupiter] ✅ ${this.rpcName} succeeded: ${tier1Result.signature}`);
-        return tier1Result;
-      }
-
-      console.log(`[Jupiter] ${this.rpcName} failed: ${tier1Result.error}`);
-
-      // ========== TIER 2: Try Jito bundles ==========
-      if (shouldUseJito && this.jitoClient) {
-        console.log(`[Jupiter] Tier 2: Trying Jito bundles...`);
+      // ========== JITO-FIRST EXECUTION (TURBO and FAST modes) ==========
+      if (shouldUseJito && this.jitoClient && mode !== ExecutionMode.SAFE) {
+        console.log(`[Jupiter] Tier 1: Jito bundles (parallel to all endpoints)...`);
 
         try {
-          // Get Jito tip
+          // Get Jito tip - use turbo tip for TURBO mode
           let jitoTip = options?.jitoTip;
           if (!jitoTip) {
-            jitoTip = JitoClient.calculateRecommendedTip(tradeValueSol);
+            jitoTip = mode === ExecutionMode.TURBO
+              ? JitoClient.calculateTurboTip(tradeValueSol)
+              : JitoClient.calculateRecommendedTip(tradeValueSol);
+
+            // Get tip floor and use higher of the two
             try {
               const floor = await getJitoTipFloor();
               jitoTip = Math.max(jitoTip, floor);
@@ -354,6 +361,93 @@ export class JupiterClient {
               // Use calculated tip if floor fetch fails
             }
           }
+
+          const jitoTxBuf = Buffer.from(swapResponse.swapTransaction, 'base64');
+          const jitoTx = VersionedTransaction.deserialize(jitoTxBuf);
+          jitoTx.sign([keypair]);
+
+          console.log(`[Jupiter] Jito tip: ${(jitoTip / 1e9).toFixed(6)} SOL (~$${((jitoTip / 1e9) * 200).toFixed(2)})`);
+
+          // Use shorter timeout for TURBO mode
+          const maxWaitMs = mode === ExecutionMode.TURBO ? 5000 : 8000;
+
+          const jitoResult = await this.jitoClient.sendTransaction(
+            jitoTx,
+            keypair,
+            {
+              tipLamports: jitoTip,
+              waitForConfirmation: mode !== ExecutionMode.TURBO, // Skip confirmation in TURBO
+              maxWaitMs: maxWaitMs,
+            }
+          );
+
+          if (jitoResult.success) {
+            // For TURBO mode, return immediately even if not confirmed
+            if (mode === ExecutionMode.TURBO || jitoResult.landed) {
+              console.log(`[Jupiter] ✅ Jito ${mode === ExecutionMode.TURBO ? 'submitted' : 'landed'}: ${jitoResult.bundleId}`);
+              return {
+                success: true,
+                signature: jitoResult.signature || jitoResult.bundleId,
+                inputAmount: quoteResponse.inAmount,
+                outputAmount: quoteResponse.outAmount,
+                priceImpact: quoteResponse.priceImpactPct,
+              };
+            }
+          }
+
+          console.log(`[Jupiter] Jito result: ${jitoResult.error || 'not landed within timeout'}`);
+
+          // TURBO mode: don't fallback, return immediately
+          if (mode === ExecutionMode.TURBO) {
+            return {
+              success: false,
+              error: `Jito submission failed: ${jitoResult.error || 'timeout'}`,
+              inputAmount: quoteResponse.inAmount,
+              outputAmount: quoteResponse.outAmount,
+              priceImpact: quoteResponse.priceImpactPct,
+            };
+          }
+        } catch (jitoErr) {
+          console.log(`[Jupiter] Jito error: ${(jitoErr as Error).message}`);
+          if (mode === ExecutionMode.TURBO) {
+            return {
+              success: false,
+              error: `Jito error: ${(jitoErr as Error).message}`,
+              inputAmount: quoteResponse.inAmount,
+              outputAmount: quoteResponse.outAmount,
+              priceImpact: quoteResponse.priceImpactPct,
+            };
+          }
+        }
+      }
+
+      // ========== TIER 2: Try RPC (fallback for FAST mode, primary for SAFE) ==========
+      const tier2Timeout = mode === ExecutionMode.SAFE ? 30000 : 10000;
+      console.log(`[Jupiter] Tier 2: ${this.rpcName} (${tier2Timeout / 1000}s timeout)...`);
+
+      const tier2Result = await this.sendWithConnection(
+        this.connection,
+        quoteResponse,
+        keypair,
+        priorityFee,
+        mode === ExecutionMode.SAFE ? 2 : 1, // Fewer retries in FAST mode
+        tier2Timeout,
+        mode !== ExecutionMode.SAFE // Skip preflight in FAST mode for speed
+      );
+
+      if (tier2Result.success) {
+        console.log(`[Jupiter] ✅ ${this.rpcName} succeeded: ${tier2Result.signature}`);
+        return tier2Result;
+      }
+
+      console.log(`[Jupiter] ${this.rpcName} failed: ${tier2Result.error}`);
+
+      // ========== TIER 3: Jito fallback for SAFE mode ==========
+      if (mode === ExecutionMode.SAFE && shouldUseJito && this.jitoClient) {
+        console.log(`[Jupiter] Tier 3: Jito bundles (SAFE mode fallback)...`);
+
+        try {
+          let jitoTip = options?.jitoTip ?? JitoClient.calculateRecommendedTip(tradeValueSol);
 
           // Build fresh transaction for Jito
           const jitoSwapResponse = await this.buildSwapTransaction({
@@ -366,8 +460,6 @@ export class JupiterClient {
             const jitoTxBuf = Buffer.from(jitoSwapResponse.swapTransaction, 'base64');
             const jitoTx = VersionedTransaction.deserialize(jitoTxBuf);
             jitoTx.sign([keypair]);
-
-            console.log(`[Jupiter] Sending via Jito with ${jitoTip} lamport tip`);
 
             const jitoResult = await this.jitoClient.sendTransaction(
               jitoTx,
@@ -397,27 +489,31 @@ export class JupiterClient {
         }
       }
 
-      // ========== TIER 3: Try Public RPC as last resort ==========
-      console.log(`[Jupiter] Tier 3: Trying public RPC...`);
-      const tier3Result = await this.sendWithConnection(
-        this.publicConnection,
-        quoteResponse,
-        keypair,
-        priorityFee,
-        2 // 2 retries for public
-      );
+      // ========== TIER 4: Public RPC as last resort (SAFE mode only) ==========
+      if (mode === ExecutionMode.SAFE) {
+        console.log(`[Jupiter] Tier 4: Public RPC (last resort)...`);
+        const tier4Result = await this.sendWithConnection(
+          this.publicConnection,
+          quoteResponse,
+          keypair,
+          priorityFee,
+          2,
+          30000,
+          false
+        );
 
-      if (tier3Result.success) {
-        console.log(`[Jupiter] ✅ Public RPC succeeded: ${tier3Result.signature}`);
-        return tier3Result;
+        if (tier4Result.success) {
+          console.log(`[Jupiter] ✅ Public RPC succeeded: ${tier4Result.signature}`);
+          return tier4Result;
+        }
+
+        console.log(`[Jupiter] Public RPC failed: ${tier4Result.error}`);
       }
-
-      console.log(`[Jupiter] Public RPC failed: ${tier3Result.error}`);
 
       // All tiers failed
       return {
         success: false,
-        error: `All execution methods failed. Last error: ${tier3Result.error}`,
+        error: `All execution methods failed (mode: ${mode})`,
         inputAmount: quoteResponse.inAmount,
         outputAmount: quoteResponse.outAmount,
         priceImpact: quoteResponse.priceImpactPct,
@@ -435,13 +531,23 @@ export class JupiterClient {
 
   /**
    * Helper: Send transaction via a specific connection with retries
+   *
+   * @param connection - RPC connection to use
+   * @param quoteResponse - Jupiter quote
+   * @param keypair - Signer keypair
+   * @param priorityFee - Priority fee in lamports
+   * @param maxRetries - Number of retry attempts
+   * @param timeoutMs - Confirmation timeout (default 30s, use 10s for FAST mode)
+   * @param skipPreflight - Skip preflight for speed (default false)
    */
   private async sendWithConnection(
     connection: Connection,
     quoteResponse: QuoteResponse,
     keypair: Keypair,
     priorityFee: number,
-    maxRetries: number
+    maxRetries: number,
+    timeoutMs: number = 30000,
+    skipPreflight: boolean = false
   ): Promise<SwapResult> {
     let lastError: Error | undefined;
 
@@ -462,19 +568,19 @@ export class JupiterClient {
         const transaction = VersionedTransaction.deserialize(txBuf);
         transaction.sign([keypair]);
 
+        // Skip preflight for FAST mode (professional bots do this for speed)
         const signature = await connection.sendTransaction(transaction, {
-          skipPreflight: false,
+          skipPreflight: skipPreflight,
           maxRetries: 0,
           preflightCommitment: 'confirmed',
         });
 
-        // Confirm with timeout - poll getSignatureStatuses instead of blocking confirmTransaction
-        // This avoids "block height exceeded" errors from stale blockhash while also not waiting too long
-        const CONFIRMATION_TIMEOUT_MS = 30000; // 30 seconds max
-        const POLL_INTERVAL_MS = 1000; // Check every second
+        // Confirm with configurable timeout
+        // Reduced poll interval for faster confirmation detection
+        const POLL_INTERVAL_MS = skipPreflight ? 200 : 500; // Poll faster in FAST mode
         const startTime = Date.now();
 
-        while (Date.now() - startTime < CONFIRMATION_TIMEOUT_MS) {
+        while (Date.now() - startTime < timeoutMs) {
           const status = await connection.getSignatureStatus(signature);
 
           if (status.value !== null) {
@@ -508,11 +614,13 @@ export class JupiterClient {
           };
         }
 
-        throw new Error(`Transaction confirmation timeout after ${CONFIRMATION_TIMEOUT_MS / 1000}s`);
+        throw new Error(`Transaction confirmation timeout after ${timeoutMs / 1000}s`);
       } catch (err) {
         lastError = err as Error;
         if (attempt < maxRetries - 1) {
-          await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+          // Shorter backoff in FAST mode
+          const backoffMs = skipPreflight ? 300 : Math.pow(2, attempt) * 1000;
+          await new Promise(r => setTimeout(r, backoffMs));
         }
       }
     }
@@ -536,6 +644,7 @@ export class JupiterClient {
     options?: {
       slippageBps?: number;
       priorityFee?: number;
+      executionMode?: ExecutionMode;
     }
   ): Promise<SwapResult> {
     const quote = await this.getBuyQuote(
@@ -546,6 +655,7 @@ export class JupiterClient {
 
     return this.executeSwap(quote, keypair, {
       priorityFee: options?.priorityFee,
+      executionMode: options?.executionMode,
     });
   }
 
@@ -560,6 +670,7 @@ export class JupiterClient {
     options?: {
       slippageBps?: number;
       priorityFee?: number;
+      executionMode?: ExecutionMode;
     }
   ): Promise<SwapResult> {
     const quote = await this.getSellQuote(
@@ -571,6 +682,7 @@ export class JupiterClient {
 
     return this.executeSwap(quote, keypair, {
       priorityFee: options?.priorityFee,
+      executionMode: options?.executionMode,
     });
   }
 

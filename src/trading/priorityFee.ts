@@ -171,14 +171,17 @@ export class PriorityFeeService {
 
   /**
    * Get default fees when APIs fail
+   *
+   * NOTE: Fees increased 10x to be competitive with professional bots
+   * BullX uses 0.01-0.05 SOL tips, Trojan uses "turbo mode" with high gas
    */
   private getDefaultFees(): PriorityFeeEstimate {
     return {
-      low: 1000,
-      medium: 10000,
-      high: 100000,
-      veryHigh: 500000,
-      unsafeMax: 1000000,
+      low: 100_000,       // 0.0001 SOL
+      medium: 500_000,    // 0.0005 SOL
+      high: 1_000_000,    // 0.001 SOL
+      veryHigh: 5_000_000, // 0.005 SOL
+      unsafeMax: 10_000_000, // 0.01 SOL
     };
   }
 
@@ -229,6 +232,9 @@ export class PriorityFeeService {
   /**
    * Calculate priority fee based on trade value and urgency
    *
+   * NOTE: Multipliers increased to be competitive with professional bots
+   * Memecoin trading requires aggressive fees for reliable execution
+   *
    * @param tradeValueSol - Value of trade in SOL
    * @param urgency - How urgent (1-10, 10 being most urgent)
    */
@@ -253,21 +259,21 @@ export class PriorityFeeService {
       baseFee = estimates.unsafeMax;
     }
 
-    // Scale up for higher value trades (MEV targets)
+    // Scale up more aggressively for higher value trades (MEV targets)
     // High value trades are more likely to be MEV'd
     let multiplier = 1;
     if (tradeValueSol > 10) {
-      multiplier = 2;
+      multiplier = 3; // Was 2
     } else if (tradeValueSol > 5) {
-      multiplier = 1.5;
+      multiplier = 2; // Was 1.5
     } else if (tradeValueSol > 1) {
-      multiplier = 1.2;
+      multiplier = 1.5; // Was 1.2
     }
 
     const finalFee = Math.ceil(baseFee * multiplier);
 
-    // Cap at 0.01 SOL to avoid excessive fees
-    const maxFee = 10_000_000; // 0.01 SOL
+    // Cap at 0.02 SOL (increased from 0.01 SOL for competitive execution)
+    const maxFee = 20_000_000; // 0.02 SOL
     return Math.min(finalFee, maxFee);
   }
 }

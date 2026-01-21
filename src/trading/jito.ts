@@ -60,6 +60,11 @@ export interface JitoConfig {
 
 /**
  * Jito Bundle Client for MEV-protected transactions
+ *
+ * Optimized for speed with:
+ * - Parallel submission to all block engine endpoints
+ * - Competitive tips for fast inclusion
+ * - Short timeouts with automatic retry
  */
 export class JitoClient {
   private connection: Connection;
@@ -68,11 +73,12 @@ export class JitoClient {
   private tipLamports: number;
   private maxRetries: number;
   private retryDelayMs: number;
+  private useParallelSubmission: boolean;
 
   constructor(rpcUrl: string, config?: JitoConfig) {
     this.connection = new Connection(rpcUrl, 'confirmed');
 
-    // Use all endpoints for rotation when rate limited
+    // Use all endpoints for parallel submission
     this.endpoints = [
       JITO_ENDPOINTS.mainnet,
       JITO_ENDPOINTS.amsterdam,
@@ -81,16 +87,18 @@ export class JitoClient {
       JITO_ENDPOINTS.tokyo,
     ];
 
-    // If specific endpoint requested, prioritize it
+    // If specific endpoint requested, prioritize it (for sequential fallback)
     if (config?.endpoint && config.endpoint in JITO_ENDPOINTS) {
       const preferred = JITO_ENDPOINTS[config.endpoint as keyof typeof JITO_ENDPOINTS];
       this.endpoints = [preferred, ...this.endpoints.filter(e => e !== preferred)];
     }
 
-    // Default tip: 50,000 lamports (0.00005 SOL) - increased for better inclusion
-    this.tipLamports = config?.tipLamports ?? 50000;
-    this.maxRetries = config?.maxRetries ?? 2; // Reduced from 3 for speed
-    this.retryDelayMs = config?.retryDelayMs ?? 500; // Reduced from 1000ms
+    // Default tip: 5,000,000 lamports (0.005 SOL) - competitive with professional bots
+    // BullX uses 0.01-0.05 SOL, we use 0.005 as baseline
+    this.tipLamports = config?.tipLamports ?? 5_000_000;
+    this.maxRetries = config?.maxRetries ?? 2;
+    this.retryDelayMs = config?.retryDelayMs ?? 300; // Fast retry
+    this.useParallelSubmission = true; // Enable parallel submission by default
   }
 
   /**
@@ -144,15 +152,137 @@ export class JitoClient {
   }
 
   /**
-   * Send a bundle of transactions to Jito
+   * Send bundle to a single endpoint
+   */
+  private async sendBundleToEndpoint(
+    endpoint: string,
+    serializedTxs: string[]
+  ): Promise<BundleResult & { endpoint: string }> {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000); // 3 second timeout per endpoint
+
+      const response = await fetch(`${endpoint}/api/v1/bundles`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'sendBundle',
+          params: [serializedTxs],
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        const error = await response.text();
+        return {
+          success: false,
+          error: `Jito bundle submission failed: ${error}`,
+          endpoint,
+        };
+      }
+
+      const result = await response.json() as { error?: { message?: string; code?: number }; result?: string };
+
+      if (result.error) {
+        return {
+          success: false,
+          error: result.error.message || JSON.stringify(result.error),
+          endpoint,
+        };
+      }
+
+      return {
+        success: true,
+        bundleId: result.result,
+        endpoint,
+      };
+    } catch (err) {
+      const error = err as Error;
+      return {
+        success: false,
+        error: error.name === 'AbortError' ? 'Timeout' : error.message,
+        endpoint,
+      };
+    }
+  }
+
+  /**
+   * Send bundle to ALL endpoints in parallel, return first success
+   * This is the key optimization - professional bots do this
+   */
+  async sendBundleParallel(
+    transactions: (Transaction | VersionedTransaction)[]
+  ): Promise<BundleResult> {
+    // Serialize transactions to base58 (Jito requires base58, not base64)
+    const serializedTxs = transactions.map((tx) => {
+      if (tx instanceof VersionedTransaction) {
+        return bs58.encode(tx.serialize());
+      } else {
+        return bs58.encode(tx.serialize());
+      }
+    });
+
+    console.log(`[Jito] Sending bundle to ${this.endpoints.length} endpoints in parallel...`);
+
+    // Send to ALL endpoints simultaneously
+    const promises = this.endpoints.map(endpoint =>
+      this.sendBundleToEndpoint(endpoint, serializedTxs)
+    );
+
+    // Wait for all to complete (we need to track all results)
+    const results = await Promise.allSettled(promises);
+
+    // Find first successful result
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value.success) {
+        console.log(`[Jito] ✅ Bundle accepted by ${result.value.endpoint}`);
+        return {
+          success: true,
+          bundleId: result.value.bundleId,
+        };
+      }
+    }
+
+    // All failed - collect errors
+    const errors = results
+      .map((r, i) => {
+        if (r.status === 'fulfilled') {
+          return `${this.endpoints[i]}: ${r.value.error}`;
+        }
+        return `${this.endpoints[i]}: ${r.reason}`;
+      })
+      .join('; ');
+
+    console.log(`[Jito] All endpoints failed: ${errors}`);
+
+    return {
+      success: false,
+      error: `All Jito endpoints failed: ${errors}`,
+    };
+  }
+
+  /**
+   * Send a bundle of transactions to Jito (uses parallel submission by default)
    */
   async sendBundle(
     transactions: (Transaction | VersionedTransaction)[],
     _options?: {
       skipPreflight?: boolean;
+      useParallel?: boolean;
     }
   ): Promise<BundleResult> {
-    // Serialize transactions to base58 (Jito requires base58, not base64)
+    // Use parallel submission by default for speed
+    if (this.useParallelSubmission && _options?.useParallel !== false) {
+      return this.sendBundleParallel(transactions);
+    }
+
+    // Fallback to sequential submission
     const serializedTxs = transactions.map((tx) => {
       if (tx instanceof VersionedTransaction) {
         return bs58.encode(tx.serialize());
@@ -269,7 +399,8 @@ export class JitoClient {
   ): Promise<BundleResult> {
     const tipLamports = options?.tipLamports ?? this.tipLamports;
     const waitForConfirmation = options?.waitForConfirmation ?? true;
-    const maxWaitMs = options?.maxWaitMs ?? 30000;
+    // Reduced from 30s to 8s - professional bots use 2-5 second timeouts
+    const maxWaitMs = options?.maxWaitMs ?? 8000;
 
     // Create tip transaction
     const tipTx = await this.createTipTransaction(payer, tipLamports);
@@ -398,20 +529,39 @@ export class JitoClient {
   /**
    * Calculate recommended tip based on trade value
    *
+   * IMPORTANT: Tips are 100x higher than before to compete with professional bots
+   * BullX uses 0.01-0.05 SOL tips for competitive sniping
+   * Trojan uses "turbo mode" with higher gas
+   *
    * Higher value trades should use higher tips for faster inclusion
-   * Increased tips for better inclusion during congestion
    */
   static calculateRecommendedTip(tradeValueSol: number): number {
     if (tradeValueSol < 0.1) {
-      return 50000; // 0.00005 SOL (~$0.01)
+      return 3_000_000; // 0.003 SOL (~$0.60)
     } else if (tradeValueSol < 0.5) {
-      return 100000; // 0.0001 SOL (~$0.02)
+      return 5_000_000; // 0.005 SOL (~$1.00)
     } else if (tradeValueSol < 1) {
-      return 200000; // 0.0002 SOL (~$0.04)
+      return 7_500_000; // 0.0075 SOL (~$1.50)
     } else if (tradeValueSol < 5) {
-      return 500000; // 0.0005 SOL (~$0.10)
+      return 10_000_000; // 0.01 SOL (~$2.00)
     } else {
-      return 1000000; // 0.001 SOL (~$0.20)
+      return 15_000_000; // 0.015 SOL (~$3.00)
+    }
+  }
+
+  /**
+   * Calculate tip for turbo/urgent mode (sniping, time-sensitive trades)
+   * These are aggressive tips for maximum speed
+   */
+  static calculateTurboTip(tradeValueSol: number): number {
+    if (tradeValueSol < 0.5) {
+      return 10_000_000; // 0.01 SOL (~$2.00)
+    } else if (tradeValueSol < 1) {
+      return 20_000_000; // 0.02 SOL (~$4.00)
+    } else if (tradeValueSol < 5) {
+      return 30_000_000; // 0.03 SOL (~$6.00)
+    } else {
+      return 50_000_000; // 0.05 SOL (~$10.00)
     }
   }
 }
