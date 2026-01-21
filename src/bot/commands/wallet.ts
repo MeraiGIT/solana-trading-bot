@@ -43,13 +43,56 @@ Choose an option to get started:
     if (!wallet) {
       message = '❌ Error loading wallet';
     } else {
-      // Get balance
+      // Get SOL balance
       let balanceText = 'Loading...';
+      let solUsdText = '';
       try {
         const balance = await walletManager.getBalance(wallet.publicAddress);
         balanceText = `${balance.sol.toFixed(4)} SOL`;
+
+        // Fetch SOL price
+        try {
+          const { TokenInfoService } = await import('../../trading/tokenInfo.js');
+          const tokenInfo = new TokenInfoService();
+          const solInfo = await tokenInfo.getTokenInfo('So11111111111111111111111111111111111111112');
+          if (solInfo) {
+            solUsdText = ` (~$${(balance.sol * solInfo.priceUsd).toFixed(2)})`;
+          }
+        } catch {
+          // Skip USD conversion
+        }
       } catch {
         balanceText = 'Error fetching balance';
+      }
+
+      // Get token holdings
+      let tokenText = '';
+      try {
+        const tokens = await walletManager.getAllTokenBalances(wallet.publicAddress);
+        if (tokens && tokens.length > 0) {
+          tokenText = '\n\n📊 *Token Holdings:*';
+          const { TokenInfoService } = await import('../../trading/tokenInfo.js');
+          const tokenInfo = new TokenInfoService();
+
+          for (const token of tokens.slice(0, 5)) {
+            try {
+              const info = await tokenInfo.getTokenInfo(token.mint);
+              const symbol = info?.symbol || token.mint.slice(0, 6) + '...';
+              const usdVal = info ? token.amount * info.priceUsd : 0;
+              tokenText += `\n• *${symbol}:* ${token.amount.toFixed(4)}`;
+              if (usdVal > 0.01) {
+                tokenText += ` (~$${usdVal.toFixed(2)})`;
+              }
+            } catch {
+              tokenText += `\n• *${token.mint.slice(0, 6)}...:* ${token.amount.toFixed(4)}`;
+            }
+          }
+          if (tokens.length > 5) {
+            tokenText += `\n_... and ${tokens.length - 5} more_`;
+          }
+        }
+      } catch {
+        // Skip tokens on error
       }
 
       message = `
@@ -58,9 +101,9 @@ Choose an option to get started:
 *Address:*
 \`${wallet.publicAddress}\`
 
-*Balance:* ${balanceText}
-
-${wallet.isImported ? '📥 _Imported wallet_' : '🆕 _Generated wallet_'}
+*Balance:* ${balanceText}${solUsdText}
+${tokenText}
+${wallet.isImported ? '\n📥 _Imported wallet_' : '\n🆕 _Generated wallet_'}
       `.trim();
     }
   }
