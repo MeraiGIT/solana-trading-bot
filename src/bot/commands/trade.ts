@@ -513,15 +513,118 @@ Holdings: ${formatNumber(finalTokenAmount)} ${tokenInfo?.symbol || 'tokens'}
 
 /**
  * Show user positions.
- * Uses real on-chain balances and cleans up stale positions.
+ * Reconciles on-chain balances with database positions.
+ * Shows all tokens held on-chain, creating missing DB positions as needed.
  */
 export async function showPositions(ctx: BotContext): Promise<void> {
   const userId = getUserId(ctx);
 
   const wallet = await db.getWallet(userId);
-  const positions = await db.getPositions(userId);
+  if (!wallet) {
+    const message = `
+📊 *Your Positions*
 
-  if (positions.length === 0 || !wallet) {
+_No wallet found. Use /wallet to create one._
+    `.trim();
+
+    try {
+      await ctx.editMessageText(message, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[{ text: '💰 Wallet', callback_data: 'menu:wallet' }], [{ text: '◀️ Back', callback_data: 'menu:main' }]],
+        },
+      });
+    } catch {
+      await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[{ text: '💰 Wallet', callback_data: 'menu:wallet' }], [{ text: '◀️ Back', callback_data: 'menu:main' }]],
+        },
+      });
+    }
+    return;
+  }
+
+  // Get database positions
+  const dbPositions = await db.getPositions(userId);
+  const dbPositionMap = new Map(dbPositions.map(p => [p.tokenAddress, p]));
+
+  // Fetch ALL on-chain token balances
+  let onChainTokens: Array<{ mint: string; amount: number; decimals: number }> = [];
+  try {
+    onChainTokens = await walletManager.getAllTokenBalances(wallet.publicAddress);
+  } catch (error) {
+    console.error('Error fetching on-chain balances:', error);
+  }
+
+  // Build unified positions list: on-chain tokens + DB metadata
+  const displayPositions: Array<{
+    tokenAddress: string;
+    tokenSymbol: string;
+    amount: number;
+    entryPriceUsd: number;
+    currentPrice: number;
+    decimals: number;
+    fromDb: boolean;
+  }> = [];
+
+  // Process on-chain tokens and reconcile with DB
+  for (const token of onChainTokens) {
+    if (token.amount <= 0) continue;
+
+    const dbPos = dbPositionMap.get(token.mint);
+
+    // Get current token info from DexScreener
+    let tokenInfo = null;
+    try {
+      tokenInfo = await router.getTokenInfo(token.mint);
+    } catch {
+      // Continue without token info
+    }
+
+    const symbol = tokenInfo?.symbol || dbPos?.tokenSymbol || token.mint.slice(0, 6) + '...';
+    const currentPrice = tokenInfo?.priceUsd || 0;
+    const entryPrice = dbPos?.entryPriceUsd || currentPrice; // Use current as entry if unknown
+
+    displayPositions.push({
+      tokenAddress: token.mint,
+      tokenSymbol: symbol,
+      amount: token.amount,
+      entryPriceUsd: entryPrice,
+      currentPrice: currentPrice,
+      decimals: token.decimals,
+      fromDb: !!dbPos,
+    });
+
+    // If token exists on-chain but not in DB, create a position record
+    if (!dbPos && tokenInfo) {
+      await db.upsertPosition({
+        userId,
+        tokenAddress: token.mint,
+        tokenSymbol: symbol,
+        tokenDecimals: token.decimals,
+        amount: token.amount,
+        entryPriceUsd: currentPrice, // Use current price as entry (since we don't know real entry)
+        entrySol: null,
+      });
+    } else if (dbPos && Math.abs(dbPos.amount - token.amount) > 0.01) {
+      // Sync DB amount with on-chain if different
+      await db.upsertPosition({
+        ...dbPos,
+        amount: token.amount,
+      });
+    }
+
+    // Remove from map so we know which DB positions are stale
+    dbPositionMap.delete(token.mint);
+  }
+
+  // Clean up DB positions that no longer exist on-chain
+  for (const [tokenAddress] of dbPositionMap) {
+    await db.deletePosition(userId, tokenAddress);
+  }
+
+  if (displayPositions.length === 0) {
     const message = `
 📊 *Your Positions*
 
@@ -548,79 +651,30 @@ Paste a token address to start trading!
     return;
   }
 
-  // Build positions list with current prices and on-chain balances
+  // Build positions list with PnL
   let positionsList = '';
   const buttons: { text: string; callback_data: string }[][] = [];
-  const validPositions: typeof positions = [];
 
-  for (const pos of positions.slice(0, 5)) { // Show max 5
-    // Fetch real on-chain balance
-    const onChainBalance = await walletManager.getTokenBalance(
-      wallet.publicAddress,
-      pos.tokenAddress
-    );
-
-    // If no tokens on-chain, clean up stale position silently
-    if (!onChainBalance || onChainBalance.amount <= 0) {
-      await db.deletePosition(userId, pos.tokenAddress);
-      continue;
-    }
-
-    validPositions.push(pos);
-
-    // Use on-chain balance for display
-    const displayAmount = onChainBalance.amount;
-
-    // Get current price
-    const info = await router.getTokenInfo(pos.tokenAddress);
-    const currentPrice = info?.priceUsd || 0;
-    const entryPrice = pos.entryPriceUsd || 0;
-
-    const pnlPercent = entryPrice > 0 ? ((currentPrice - entryPrice) / entryPrice) * 100 : 0;
+  for (const pos of displayPositions.slice(0, 5)) { // Show max 5
+    const pnlPercent = pos.entryPriceUsd > 0
+      ? ((pos.currentPrice - pos.entryPriceUsd) / pos.entryPriceUsd) * 100
+      : 0;
     const pnlEmoji = pnlPercent >= 0 ? '🟢' : '🔴';
     const pnlText = pnlPercent >= 0 ? `+${pnlPercent.toFixed(2)}%` : `${pnlPercent.toFixed(2)}%`;
-    const safeSymbol = escapeMarkdown(pos.tokenSymbol || 'Unknown');
+    const safeSymbol = escapeMarkdown(pos.tokenSymbol);
 
-    // Show sync indicator if DB differs from on-chain
-    const syncIndicator = Math.abs(pos.amount - displayAmount) > 0.01 ? ' 🔄' : '';
+    // Show indicator if position was auto-discovered (not in original DB)
+    const newIndicator = !pos.fromDb ? ' 🆕' : '';
 
-    positionsList += `\n*${safeSymbol}*${syncIndicator}\n`;
-    positionsList += `  Amount: ${formatNumber(displayAmount)}\n`;
-    positionsList += `  Entry: ${formatPrice(entryPrice)}\n`;
-    positionsList += `  Current: ${formatPrice(currentPrice)}\n`;
+    positionsList += `\n*${safeSymbol}*${newIndicator}\n`;
+    positionsList += `  Amount: ${formatNumber(pos.amount)}\n`;
+    positionsList += `  Entry: ${formatPrice(pos.entryPriceUsd)}\n`;
+    positionsList += `  Current: ${formatPrice(pos.currentPrice)}\n`;
     positionsList += `  PnL: ${pnlEmoji} ${pnlText}\n`;
 
     buttons.push([
-      { text: `📈 ${pos.tokenSymbol || 'Sell'}`, callback_data: `sell:${pos.tokenAddress}` },
+      { text: `📈 ${pos.tokenSymbol}`, callback_data: `sell:${pos.tokenAddress}` },
     ]);
-  }
-
-  // If all positions were stale, show empty state
-  if (validPositions.length === 0) {
-    const message = `
-📊 *Your Positions*
-
-_No open positions._
-
-Paste a token address to start trading!
-    `.trim();
-
-    try {
-      await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [[{ text: '◀️ Back', callback_data: 'menu:main' }]],
-        },
-      });
-    } catch {
-      await ctx.reply(message, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [[{ text: '◀️ Back', callback_data: 'menu:main' }]],
-        },
-      });
-    }
-    return;
   }
 
   const message = `
