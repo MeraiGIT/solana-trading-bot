@@ -343,20 +343,58 @@ export async function showBalance(ctx: BotContext): Promise<void> {
     await ctx.editMessageText('⏳ Fetching balance...');
 
     const balance = await walletManager.getBalance(wallet.publicAddress);
+    const tokens = await walletManager.getAllTokenBalances(wallet.publicAddress);
 
-    // Estimate USD value (rough estimate - should fetch real price)
-    const solPrice = 150; // TODO: Fetch real price
+    // Fetch SOL price from DexScreener
+    let solPrice = 150; // Default fallback
+    try {
+      const { TokenInfoService } = await import('../../trading/tokenInfo.js');
+      const tokenInfo = new TokenInfoService();
+      const solInfo = await tokenInfo.getTokenInfo('So11111111111111111111111111111111111111112');
+      if (solInfo) {
+        solPrice = solInfo.priceUsd;
+      }
+    } catch {
+      // Use default price
+    }
+
     const usdValue = balance.sol * solPrice;
 
-    const message = `
+    let message = `
 💵 *Wallet Balance*
 
-*SOL:* ${balance.sol.toFixed(4)}
-*USD:* ~$${usdValue.toFixed(2)}
+*SOL:* ${balance.sol.toFixed(4)} (~$${usdValue.toFixed(2)})
 
 *Address:*
 \`${wallet.publicAddress}\`
     `.trim();
+
+    // Add token holdings if any
+    if (tokens && tokens.length > 0) {
+      message += `\n\n📊 *Token Holdings:*`;
+
+      // Fetch token info for symbols
+      const { TokenInfoService } = await import('../../trading/tokenInfo.js');
+      const tokenInfo = new TokenInfoService();
+
+      for (const token of tokens.slice(0, 5)) { // Show max 5 tokens
+        try {
+          const info = await tokenInfo.getTokenInfo(token.mint);
+          const symbol = info?.symbol || token.mint.slice(0, 6) + '...';
+          const usdVal = info ? token.amount * info.priceUsd : 0;
+          message += `\n• *${symbol}:* ${token.amount.toFixed(4)}`;
+          if (usdVal > 0) {
+            message += ` (~$${usdVal.toFixed(2)})`;
+          }
+        } catch {
+          message += `\n• *${token.mint.slice(0, 6)}...:* ${token.amount.toFixed(4)}`;
+        }
+      }
+
+      if (tokens.length > 5) {
+        message += `\n_... and ${tokens.length - 5} more tokens_`;
+      }
+    }
 
     await ctx.editMessageText(message, {
       parse_mode: 'Markdown',

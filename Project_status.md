@@ -1,9 +1,9 @@
 # Project Status - Solana Trading Bot
 
 > **Last Updated**: 2026-01-20
-> **Current Version**: 0.4.0
-> **Current Phase**: Phase 6 - On-Chain Data Integration
-> **Overall Progress**: 98%
+> **Current Version**: 0.4.1
+> **Current Phase**: Phase 7 - Transaction Reliability
+> **Overall Progress**: 99%
 
 ---
 
@@ -202,11 +202,36 @@ src/trading/
 2. ~~Token amounts showing millions instead of actual~~ **FIXED** - Now divides by 10^decimals
 3. ~~Jupiter API 401 Unauthorized~~ **FIXED** - Added x-api-key header
 4. ~~100% sells failing with 0x1788~~ **FIXED** - Now uses on-chain balance (v0.4.0)
-5. No current known issues
+5. ~~Jito bundles "transaction could not be decoded"~~ **FIXED** - Changed to base58 encoding (v0.4.1)
+6. ~~Blockhash expired after Jito fallback~~ **FIXED** - Fresh blockhash on retry (v0.4.1)
+7. No current known issues
 
 ---
 
 ## Session Log
+
+### 2026-01-20 (Session 7) - Transaction Reliability & MEV Protection
+- **Critical Fix: Jito Bundle Serialization**
+  - Root cause: Jito API expects base58-encoded transactions, not base64
+  - Error: "transaction could not be decoded" on every Jito attempt
+  - Solution: Changed `Buffer.toString('base64')` to `bs58.encode()`
+  - Result: Jito bundles now land successfully with MEV protection
+- **Critical Fix: Blockhash Expiration**
+  - Root cause: After Jito fails, original transaction blockhash was stale
+  - Error: "Blockhash not found" during fallback submission
+  - Solution: Rebuild transaction with fresh blockhash on each retry
+- **Performance Optimizations**:
+  - Added Jito endpoint rotation (5 endpoints: mainnet, amsterdam, frankfurt, ny, tokyo)
+  - Increased default priority fee: 100k → 500k lamports
+  - Increased Jito tip: 10k → 50k lamports (with trade-value scaling)
+  - Reduced Jito timeout: 30s → 15s for faster fallback
+  - Reduced Jito retries: 3 → 2 attempts, 1000ms → 500ms delay
+- **End-to-End Test Results**:
+  - Buy via Jito MEV protection: ✅ Bundle landed
+  - Sell 50%: ✅ Succeeded
+  - Sell 100%: ✅ Succeeded
+  - Stop Loss order: ✅ Created and stored
+- **Version**: 0.4.1
 
 ### 2026-01-20 (Session 6) - On-Chain Data Integration
 - **Critical Fix: 100% Sell Failures**

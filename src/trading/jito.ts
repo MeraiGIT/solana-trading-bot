@@ -19,6 +19,7 @@ import {
   VersionedTransaction,
   LAMPORTS_PER_SOL,
 } from '@solana/web3.js';
+import bs58 from 'bs58';
 
 // Jito Block Engine endpoints
 const JITO_ENDPOINTS = {
@@ -62,7 +63,8 @@ export interface JitoConfig {
  */
 export class JitoClient {
   private connection: Connection;
-  private endpoint: string;
+  private endpoints: string[];
+  private currentEndpointIndex: number = 0;
   private tipLamports: number;
   private maxRetries: number;
   private retryDelayMs: number;
@@ -70,20 +72,40 @@ export class JitoClient {
   constructor(rpcUrl: string, config?: JitoConfig) {
     this.connection = new Connection(rpcUrl, 'confirmed');
 
-    // Set Jito endpoint
+    // Use all endpoints for rotation when rate limited
+    this.endpoints = [
+      JITO_ENDPOINTS.mainnet,
+      JITO_ENDPOINTS.amsterdam,
+      JITO_ENDPOINTS.frankfurt,
+      JITO_ENDPOINTS.ny,
+      JITO_ENDPOINTS.tokyo,
+    ];
+
+    // If specific endpoint requested, prioritize it
     if (config?.endpoint && config.endpoint in JITO_ENDPOINTS) {
-      this.endpoint = JITO_ENDPOINTS[config.endpoint as keyof typeof JITO_ENDPOINTS];
-    } else if (config?.endpoint) {
-      this.endpoint = config.endpoint;
-    } else {
-      this.endpoint = JITO_ENDPOINTS.mainnet;
+      const preferred = JITO_ENDPOINTS[config.endpoint as keyof typeof JITO_ENDPOINTS];
+      this.endpoints = [preferred, ...this.endpoints.filter(e => e !== preferred)];
     }
 
-    // Default tip: 10,000 lamports (0.00001 SOL ~ $0.002)
-    // Increase for high-value trades
-    this.tipLamports = config?.tipLamports ?? 10000;
-    this.maxRetries = config?.maxRetries ?? 3;
-    this.retryDelayMs = config?.retryDelayMs ?? 1000;
+    // Default tip: 50,000 lamports (0.00005 SOL) - increased for better inclusion
+    this.tipLamports = config?.tipLamports ?? 50000;
+    this.maxRetries = config?.maxRetries ?? 2; // Reduced from 3 for speed
+    this.retryDelayMs = config?.retryDelayMs ?? 500; // Reduced from 1000ms
+  }
+
+  /**
+   * Get current endpoint and rotate on failure
+   */
+  private getEndpoint(): string {
+    return this.endpoints[this.currentEndpointIndex];
+  }
+
+  /**
+   * Rotate to next endpoint (called on rate limit)
+   */
+  private rotateEndpoint(): void {
+    this.currentEndpointIndex = (this.currentEndpointIndex + 1) % this.endpoints.length;
+    console.log(`[Jito] Rotating to endpoint: ${this.getEndpoint()}`);
   }
 
   /**
@@ -130,17 +152,18 @@ export class JitoClient {
       skipPreflight?: boolean;
     }
   ): Promise<BundleResult> {
-    // Serialize transactions to base64
+    // Serialize transactions to base58 (Jito requires base58, not base64)
     const serializedTxs = transactions.map((tx) => {
       if (tx instanceof VersionedTransaction) {
-        return Buffer.from(tx.serialize()).toString('base64');
+        return bs58.encode(tx.serialize());
       } else {
-        return tx.serialize().toString('base64');
+        return bs58.encode(tx.serialize());
       }
     });
 
-    // Send to Jito block engine
-    const response = await fetch(`${this.endpoint}/api/v1/bundles`, {
+    // Send to Jito block engine with endpoint rotation on failure
+    const endpoint = this.getEndpoint();
+    const response = await fetch(`${endpoint}/api/v1/bundles`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -155,15 +178,21 @@ export class JitoClient {
 
     if (!response.ok) {
       const error = await response.text();
+      // Rotate endpoint on failure
+      this.rotateEndpoint();
       return {
         success: false,
         error: `Jito bundle submission failed: ${error}`,
       };
     }
 
-    const result = await response.json() as { error?: { message?: string }; result?: string };
+    const result = await response.json() as { error?: { message?: string; code?: number }; result?: string };
 
     if (result.error) {
+      // Rotate endpoint on rate limit (-32097) or other errors
+      if (result.error.code === -32097 || result.error.code === -32602) {
+        this.rotateEndpoint();
+      }
       return {
         success: false,
         error: result.error.message || JSON.stringify(result.error),
@@ -183,7 +212,7 @@ export class JitoClient {
     landed: boolean;
     status: string;
   }> {
-    const response = await fetch(`${this.endpoint}/api/v1/bundles`, {
+    const response = await fetch(`${this.getEndpoint()}/api/v1/bundles`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -370,16 +399,19 @@ export class JitoClient {
    * Calculate recommended tip based on trade value
    *
    * Higher value trades should use higher tips for faster inclusion
+   * Increased tips for better inclusion during congestion
    */
   static calculateRecommendedTip(tradeValueSol: number): number {
     if (tradeValueSol < 0.1) {
-      return 10000; // 0.00001 SOL
+      return 50000; // 0.00005 SOL (~$0.01)
+    } else if (tradeValueSol < 0.5) {
+      return 100000; // 0.0001 SOL (~$0.02)
     } else if (tradeValueSol < 1) {
-      return 50000; // 0.00005 SOL
-    } else if (tradeValueSol < 10) {
-      return 100000; // 0.0001 SOL
+      return 200000; // 0.0002 SOL (~$0.04)
+    } else if (tradeValueSol < 5) {
+      return 500000; // 0.0005 SOL (~$0.10)
     } else {
-      return 500000; // 0.0005 SOL
+      return 1000000; // 0.001 SOL (~$0.20)
     }
   }
 }

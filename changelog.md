@@ -6,6 +6,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.4.1] - 2026-01-20
+
+### Fixed
+- **CRITICAL: Jito Bundle Serialization** (`src/trading/jito.ts`)
+  - Changed transaction encoding from base64 to base58 (Jito API requirement)
+  - Jito bundles now successfully land with MEV protection
+  - Previously: "transaction could not be decoded" errors on every Jito attempt
+
+- **CRITICAL: Blockhash Expiration on Fallback** (`src/trading/jupiter.ts`)
+  - Added fresh blockhash retrieval when falling back from Jito to regular RPC
+  - Transactions are now rebuilt with new blockhash on each retry attempt
+  - Previously: "Blockhash not found" errors after Jito failures
+
+### Added
+- **Jito Endpoint Rotation** (`src/trading/jito.ts`)
+  - Added 5 Jito endpoints: mainnet, amsterdam, frankfurt, ny, tokyo
+  - Automatic rotation when rate limited (-32097) or on decode errors (-32602)
+  - Logs endpoint changes for debugging
+
+### Changed
+- **Higher Priority Fees** (`src/trading/jupiter.ts`)
+  - Increased default priority fee from 100k to 500k lamports
+  - Faster transaction confirmation during network congestion
+
+- **Higher Jito Tips** (`src/trading/jito.ts`)
+  - Increased base tip from 10k to 50k lamports
+  - Trade-value-based tip calculation:
+    - < 0.1 SOL: 50k lamports
+    - 0.1-0.5 SOL: 100k lamports
+    - 0.5-1 SOL: 200k lamports
+    - 1-5 SOL: 500k lamports
+    - > 5 SOL: 1M lamports
+
+- **Faster Jito Timeout** (`src/trading/jupiter.ts`)
+  - Reduced maxWaitMs from 30s to 15s for faster fallback
+
+- **Reduced Jito Retries** (`src/trading/jito.ts`)
+  - Reduced maxRetries from 3 to 2
+  - Reduced retryDelayMs from 1000ms to 500ms
+
+### Tested End-to-End
+- Buy 0.013 SOL via Jito → Jito bundle landed successfully ✅
+- Sell 50% → Transaction succeeded ✅
+- Sell 100% → Transaction succeeded ✅
+- Stop Loss order creation → Order stored correctly ✅
+- Price monitor checking every 30s ✅
+
+---
+
 ## [0.4.0] - 2026-01-20
 
 ### Changed

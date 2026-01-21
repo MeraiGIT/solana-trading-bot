@@ -16,7 +16,7 @@ import { appConfig } from './utils/env.js';
 
 console.log('='.repeat(50));
 console.log('  Solana Trading Bot');
-console.log('  Version: 0.3.0');
+console.log('  Version: 0.4.1');
 console.log('='.repeat(50));
 
 // Create bot instance

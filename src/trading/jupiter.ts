@@ -118,7 +118,7 @@ export class JupiterClient {
   ) {
     this.connection = new Connection(rpcUrl, 'confirmed');
     this.defaultSlippageBps = options?.defaultSlippageBps ?? 500; // 5%
-    this.defaultPriorityFee = options?.defaultPriorityFee ?? 100000; // 0.0001 SOL
+    this.defaultPriorityFee = options?.defaultPriorityFee ?? 500000; // 0.0005 SOL - increased for faster confirmation
     this.useJito = options?.useJito ?? true; // Enable Jito by default
     this.apiKey = options?.jupiterApiKey;
 
@@ -315,8 +315,19 @@ export class JupiterClient {
       // Try Jito first if enabled
       if (shouldUseJito && this.jitoClient) {
         try {
-          // Get Jito tip (use provided or fetch current floor)
-          const jitoTip = options?.jitoTip ?? await getJitoTipFloor();
+          // Get Jito tip (use provided, or calculate based on trade value, or fetch floor)
+          let jitoTip = options?.jitoTip;
+          if (!jitoTip) {
+            // Use trade-value-based tip for better inclusion
+            jitoTip = JitoClient.calculateRecommendedTip(tradeValueSol);
+            // Also check floor and use higher of the two
+            try {
+              const floor = await getJitoTipFloor();
+              jitoTip = Math.max(jitoTip, floor);
+            } catch {
+              // Use calculated tip if floor fetch fails
+            }
+          }
 
           console.log(`[Jupiter] Sending via Jito with ${jitoTip} lamport tip`);
 
@@ -326,7 +337,7 @@ export class JupiterClient {
             {
               tipLamports: jitoTip,
               waitForConfirmation: true,
-              maxWaitMs: 30000,
+              maxWaitMs: 15000, // Reduced from 30s for faster fallback
             }
           );
 
@@ -354,7 +365,37 @@ export class JupiterClient {
 
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
-          signature = await this.connection.sendTransaction(transaction, {
+          // Always get fresh transaction on each attempt (especially important after Jito fallback)
+          let txToSend = transaction;
+          let blockhashToConfirm = transaction.message.recentBlockhash;
+          let lastValidHeight = swapResponse.lastValidBlockHeight;
+
+          // If this is a retry OR we're falling back from Jito, rebuild with fresh blockhash
+          if (attempt > 0 || (shouldUseJito && this.jitoClient)) {
+            console.log(`[Jupiter] Attempt ${attempt + 1}: Rebuilding transaction with fresh blockhash`);
+            try {
+              const freshSwapResponse = await this.buildSwapTransaction({
+                quoteResponse,
+                userPublicKey: keypair.publicKey.toBase58(),
+                prioritizationFeeLamports: priorityFee,
+              });
+
+              if (freshSwapResponse.simulationError) {
+                throw new Error(`Simulation failed: ${freshSwapResponse.simulationError}`);
+              }
+
+              const freshTxBuf = Buffer.from(freshSwapResponse.swapTransaction, 'base64');
+              txToSend = VersionedTransaction.deserialize(freshTxBuf);
+              txToSend.sign([keypair]);
+              blockhashToConfirm = txToSend.message.recentBlockhash;
+              lastValidHeight = freshSwapResponse.lastValidBlockHeight;
+            } catch (rebuildErr) {
+              console.log(`[Jupiter] Failed to rebuild: ${(rebuildErr as Error).message}`);
+              throw rebuildErr;
+            }
+          }
+
+          signature = await this.connection.sendTransaction(txToSend, {
             skipPreflight: false,
             maxRetries: 0,
             preflightCommitment: 'confirmed',
@@ -362,8 +403,8 @@ export class JupiterClient {
 
           const confirmation = await this.connection.confirmTransaction({
             signature,
-            blockhash: transaction.message.recentBlockhash,
-            lastValidBlockHeight: swapResponse.lastValidBlockHeight,
+            blockhash: blockhashToConfirm,
+            lastValidBlockHeight: lastValidHeight,
           }, 'confirmed');
 
           if (confirmation.value.err) {
