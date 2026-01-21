@@ -45,7 +45,7 @@ const priceMonitor = new PriceMonitor(db, walletManager, {
 
       if (result.success) {
         message += `✅ Order executed successfully!\n\n`;
-        message += `*Sold:* ${parseFloat(result.soldAmount).toFixed(2)} tokens\n`;
+        message += `*Sold:* ${parseFloat(result.soldAmount).toFixed(2)} ${result.tokenSymbol}\n`;
         message += `*Received:* ${parseFloat(result.receivedSol).toFixed(4)} SOL\n`;
         if (result.signature) {
           message += `\n[View on Solscan](https://solscan.io/tx/${result.signature})`;

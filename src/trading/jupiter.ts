@@ -468,27 +468,47 @@ export class JupiterClient {
           preflightCommitment: 'confirmed',
         });
 
-        // Get fresh blockhash for confirmation
-        // Jupiter's blockhash can become stale during retries, causing "block height exceeded" errors
-        // especially with strict RPC providers like Helius
-        const latestBlockhash = await connection.getLatestBlockhash('confirmed');
-        const confirmation = await connection.confirmTransaction({
-          signature,
-          blockhash: latestBlockhash.blockhash,
-          lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-        }, 'confirmed');
+        // Confirm with timeout - poll getSignatureStatuses instead of blocking confirmTransaction
+        // This avoids "block height exceeded" errors from stale blockhash while also not waiting too long
+        const CONFIRMATION_TIMEOUT_MS = 30000; // 30 seconds max
+        const POLL_INTERVAL_MS = 1000; // Check every second
+        const startTime = Date.now();
 
-        if (confirmation.value.err) {
-          throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+        while (Date.now() - startTime < CONFIRMATION_TIMEOUT_MS) {
+          const status = await connection.getSignatureStatus(signature);
+
+          if (status.value !== null) {
+            if (status.value.err) {
+              throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
+            }
+            if (status.value.confirmationStatus === 'confirmed' || status.value.confirmationStatus === 'finalized') {
+              // Transaction confirmed successfully
+              return {
+                success: true,
+                signature,
+                inputAmount: quoteResponse.inAmount,
+                outputAmount: quoteResponse.outAmount,
+                priceImpact: quoteResponse.priceImpactPct,
+              };
+            }
+          }
+
+          await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
         }
 
-        return {
-          success: true,
-          signature,
-          inputAmount: quoteResponse.inAmount,
-          outputAmount: quoteResponse.outAmount,
-          priceImpact: quoteResponse.priceImpactPct,
-        };
+        // Timeout reached - check one more time if it landed
+        const finalStatus = await connection.getSignatureStatus(signature);
+        if (finalStatus.value?.confirmationStatus === 'confirmed' || finalStatus.value?.confirmationStatus === 'finalized') {
+          return {
+            success: true,
+            signature,
+            inputAmount: quoteResponse.inAmount,
+            outputAmount: quoteResponse.outAmount,
+            priceImpact: quoteResponse.priceImpactPct,
+          };
+        }
+
+        throw new Error(`Transaction confirmation timeout after ${CONFIRMATION_TIMEOUT_MS / 1000}s`);
       } catch (err) {
         lastError = err as Error;
         if (attempt < maxRetries - 1) {

@@ -40,6 +40,7 @@ export interface TriggerResult {
   error?: string;
   soldAmount: string;
   receivedSol: string;
+  tokenSymbol: string;
 }
 
 /**
@@ -326,6 +327,7 @@ export class PriceMonitor {
         error: result.error,
         soldAmount: String(sellAmount),
         receivedSol: result.outputAmount ? String(Number(result.outputAmount) / 1e9) : '0',
+        tokenSymbol: position.tokenSymbol || 'tokens',
       };
 
       this.config.onOrderTriggered?.(

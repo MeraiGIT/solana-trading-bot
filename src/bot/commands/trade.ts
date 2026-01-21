@@ -18,6 +18,75 @@ function escapeMarkdown(text: string): string {
   return text.replace(/([*_\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 }
 
+/**
+ * Translate Jupiter/DEX API errors to user-friendly messages.
+ * Returns both a friendly message and actionable advice.
+ */
+function translateTradeError(error: string): { message: string; advice: string; isRetryable: boolean } {
+  const lowerError = error.toLowerCase();
+
+  // No route found - token has no liquidity
+  if (lowerError.includes('could not find any route') || lowerError.includes('no route found')) {
+    return {
+      message: 'No swap route available',
+      advice: 'This token may have no liquidity or has been rugged. Check the token on Solscan or DexScreener.',
+      isRetryable: false
+    };
+  }
+
+  // Shared accounts / AMM not supported
+  if (lowerError.includes('simple amms are not supported') || lowerError.includes('shared accounts')) {
+    return {
+      message: 'Token swap not supported',
+      advice: 'This token uses an AMM type that Jupiter cannot swap. The pool may be inactive or incompatible.',
+      isRetryable: false
+    };
+  }
+
+  // Slippage exceeded
+  if (lowerError.includes('slippage') || lowerError.includes('price moved')) {
+    return {
+      message: 'Price moved too much',
+      advice: 'The price changed during the swap. Try again with higher slippage or a smaller amount.',
+      isRetryable: true
+    };
+  }
+
+  // Insufficient balance
+  if (lowerError.includes('insufficient') || lowerError.includes('not enough')) {
+    return {
+      message: 'Insufficient balance',
+      advice: 'Check your wallet balance and try again.',
+      isRetryable: false
+    };
+  }
+
+  // Transaction expired
+  if (lowerError.includes('block height exceeded') || lowerError.includes('expired')) {
+    return {
+      message: 'Transaction timed out',
+      advice: 'Network is congested. Please try again.',
+      isRetryable: true
+    };
+  }
+
+  // Simulation failed
+  if (lowerError.includes('simulation failed')) {
+    return {
+      message: 'Transaction simulation failed',
+      advice: 'The transaction would fail on-chain. Try with different settings.',
+      isRetryable: true
+    };
+  }
+
+  // Default: unknown error
+  return {
+    message: 'Transaction failed',
+    advice: escapeMarkdown(error),
+    isRetryable: true
+  };
+}
+
 // Create instances
 const walletManager = new WalletManager(
   appConfig.masterEncryptionKey,
@@ -477,36 +546,40 @@ Holdings: ${formatNumber(finalTokenAmount)} ${tokenInfo?.symbol || 'tokens'}
         errorMessage: result.error || 'Unknown error',
       });
 
+      const errorInfo = translateTradeError(result.error || 'Transaction failed');
+      const buttons = errorInfo.isRetryable
+        ? [
+            [{ text: '🔄 Try Again', callback_data: `token:${tokenAddress}` }],
+            [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+          ]
+        : [
+            [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+          ];
+
       await updateStatusMessage(
         ctx,
         statusMsgId,
-        `❌ *Buy Failed*\n\n` +
-        `*Error:* ${result.error || 'Transaction failed'}\n\n` +
-        `This can happen due to:\n` +
-        `• High slippage / price moved\n` +
-        `• Insufficient liquidity\n` +
-        `• Network congestion\n\n` +
-        `Please try again.`,
-        {
-          inline_keyboard: [
-            [{ text: '🔄 Try Again', callback_data: `token:${tokenAddress}` }],
-            [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
-          ],
-        }
+        `❌ *Buy Failed*\n\n*${errorInfo.message}*\n\n${errorInfo.advice}`,
+        { inline_keyboard: buttons }
       );
     }
   } catch (error) {
     console.error('Buy error:', error);
+    const errorInfo = translateTradeError((error as Error).message);
+    const buttons = errorInfo.isRetryable
+      ? [
+          [{ text: '🔄 Try Again', callback_data: `token:${tokenAddress}` }],
+          [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+        ]
+      : [
+          [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+        ];
+
     await updateStatusMessage(
       ctx,
       statusMsgId,
-      `❌ *Error*\n\n${(error as Error).message}\n\nPlease try again.`,
-      {
-        inline_keyboard: [
-          [{ text: '🔄 Try Again', callback_data: `token:${tokenAddress}` }],
-          [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
-        ],
-      }
+      `❌ *Error*\n\n*${errorInfo.message}*\n\n${errorInfo.advice}`,
+      { inline_keyboard: buttons }
     );
   }
 }
@@ -570,7 +643,8 @@ _No wallet found. Use /wallet to create one._
 
   // Process on-chain tokens and reconcile with DB
   for (const token of onChainTokens) {
-    if (token.amount <= 0) continue;
+    // Skip zero or dust amounts (tokens with tiny balances that display as "0.00")
+    if (token.amount <= 0.0001) continue;
 
     const dbPos = dbPositionMap.get(token.mint);
 
@@ -941,29 +1015,46 @@ ${result.signature ? `\n[View on Solscan](https://solscan.io/tx/${result.signatu
         errorMessage: result.error || 'Unknown error',
       });
 
-      const safeError = escapeMarkdown(result.error || 'Transaction failed');
+      const errorInfo = translateTradeError(result.error || 'Transaction failed');
+      const buttons = errorInfo.isRetryable
+        ? [
+            [{ text: '🔄 Try Again', callback_data: `sell:${tokenAddress}` }],
+            [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+          ]
+        : [
+            [{ text: '📊 View Positions', callback_data: 'trade:positions' }],
+            [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+          ];
+
       await ctx.editMessageText(
-        `❌ *Sell Failed*\n\n${safeError}\n\nPlease try again.`,
+        `❌ *Sell Failed*\n\n*${errorInfo.message}*\n\n${errorInfo.advice}`,
         {
           parse_mode: 'Markdown',
           reply_markup: {
-            inline_keyboard: [
-              [{ text: '🔄 Try Again', callback_data: `sell:${tokenAddress}` }],
-              [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
-            ],
+            inline_keyboard: buttons,
           },
         }
       );
     }
   } catch (error) {
     console.error('Sell error:', error);
-    const safeErrorMsg = escapeMarkdown((error as Error).message);
+    const errorInfo = translateTradeError((error as Error).message);
+    const buttons = errorInfo.isRetryable
+      ? [
+          [{ text: '🔄 Try Again', callback_data: `sell:${tokenAddress}` }],
+          [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+        ]
+      : [
+          [{ text: '📊 View Positions', callback_data: 'trade:positions' }],
+          [{ text: '🏠 Main Menu', callback_data: 'menu:main' }],
+        ];
+
     await ctx.editMessageText(
-      `❌ *Error*\n\n${safeErrorMsg}`,
+      `❌ *Error*\n\n*${errorInfo.message}*\n\n${errorInfo.advice}`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
-          inline_keyboard: [[{ text: '🏠 Main Menu', callback_data: 'menu:main' }]],
+          inline_keyboard: buttons,
         },
       }
     );
