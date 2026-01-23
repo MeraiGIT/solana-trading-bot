@@ -6,6 +6,88 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.0] - 2026-01-23
+
+### Added
+- **Production Hardening** - Complete security overhaul for production deployment
+
+- **Structured Logging System** (`src/utils/logger.ts`)
+  - Log levels: DEBUG, INFO, WARN, ERROR
+  - Module-based logger creation
+  - JSON output for production, colored console for development
+  - Child logger support for sub-modules
+
+- **Rate Limiting** (`src/utils/rateLimiter.ts`)
+  - Token bucket algorithm for API rate limiting
+  - Sliding window counter for daily limits
+  - Pre-configured limiters: Jupiter, DexScreener, PumpPortal, Helius, Jito
+  - Private key export: max 3 per 24 hours
+  - Trades: max 500 per 24 hours
+  - Withdrawals: max 50 per 24 hours
+
+- **Audit Logging** (`src/services/audit.ts`)
+  - Security event tracking to Supabase `tb_audit_logs`
+  - Wallet events: create, import, export, delete
+  - Trade events: buy, sell
+  - Security events: rate limit exceeded, validation failed
+  - Includes user_id, action, details JSON, timestamps
+
+- **Health Check Server** (`src/services/health.ts`)
+  - HTTP endpoints for Railway health checks
+  - `/health` - Full health check (DB, RPC, bot status)
+  - `/ready` - Readiness probe
+  - `/live` - Liveness probe
+  - `/metrics` - Basic system metrics
+
+- **Security Validation** (`src/utils/security.ts`)
+  - `validateTradeAmount()` - Min/max trade validation
+  - `validateSlippage()` - Slippage bounds checking
+  - `validateSolanaAddress()` - Base58 address validation
+  - `validateSellPercentage()` - 1-100% validation
+  - `validateTriggerPrice()` - SL/TP price validation
+  - `sanitizeInput()` - Remove control characters, limit length
+  - `escapeMarkdown()` - Telegram message escaping
+  - `maskSensitive()` - Hide middle of sensitive strings
+  - `SecurityLimits` - Configurable trading limits
+
+- **Comprehensive Test Suite** (88 tests, all passing)
+  - `tests/encryption.test.ts` - 22 tests for AES-256-GCM encryption
+  - `tests/security.test.ts` - 38 tests for input validation
+  - `tests/rateLimiter.test.ts` - 13 tests for rate limiting
+  - `tests/logger.test.ts` - 15 tests for structured logging
+  - Jest with ESM support configuration
+
+- **Database Migration** (Supabase)
+  - Created `tb_audit_logs` table with indexes
+  - Indexes on user_id and created_at for efficient queries
+
+### Changed
+- **Private Key Export** (`src/bot/commands/wallet.ts`)
+  - Added rate limiting (max 3 exports per 24 hours)
+  - Added audit logging for all export attempts
+  - Shows remaining exports count to user
+
+- **Wallet Operations** (`src/bot/commands/wallet.ts`)
+  - All wallet create/import/delete operations now logged to audit
+
+- **Environment Configuration** (`src/utils/env.ts`, `.env.example`)
+  - Added `PORT` - Health check server port (default: 3000)
+  - Added `NODE_ENV` - production/development mode
+  - Added `LOG_LEVEL` - debug/info/warn/error
+
+- **Application Entry Point** (`src/index.ts`)
+  - Integrated health check server startup
+  - Added graceful shutdown with health server
+  - Version bumped to 0.5.0
+
+### Security
+- Rate limiting prevents abuse of sensitive operations
+- Audit logging provides security event trail
+- Input validation prevents injection attacks
+- All tests verify security-critical code paths
+
+---
+
 ## [0.4.2] - 2026-01-21
 
 ### Fixed

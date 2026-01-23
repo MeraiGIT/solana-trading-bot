@@ -271,6 +271,15 @@ tb_user_settings
 ├── auto_sl_percent (INTEGER)
 ├── auto_tp_percent (INTEGER)
 └── notifications_enabled (BOOLEAN)
+
+tb_audit_logs (v0.5.0)
+├── id (UUID, PK)
+├── user_id (BIGINT, indexed)
+├── action (TEXT)
+├── details (JSONB)
+├── ip_address (TEXT, nullable)
+├── user_agent (TEXT, nullable)
+└── created_at (TIMESTAMPTZ, indexed)
 ```
 
 ---
@@ -339,6 +348,44 @@ tb_user_settings
 - RLS policies enforce user isolation
 - All operations require valid user_id
 
+### Production Security (v0.5.0)
+
+| Component | File | Description |
+|-----------|------|-------------|
+| Rate Limiting | `utils/rateLimiter.ts` | Token bucket & sliding window |
+| Audit Logging | `services/audit.ts` | Security event tracking |
+| Input Validation | `utils/security.ts` | Trade/address/slippage validation |
+| Structured Logging | `utils/logger.ts` | Log levels, module prefixes |
+
+**Rate Limits**:
+- Private key export: 3 per 24 hours
+- Trades: 500 per 24 hours
+- Withdrawals: 50 per 24 hours
+- API calls: Token bucket per service
+
+**Audit Events**:
+- Wallet: create, import, export, delete
+- Trades: buy, sell
+- Security: rate limit exceeded, validation failed
+
+---
+
+## Health & Monitoring (`src/services/health.ts`)
+
+**Purpose**: Railway health checks and system monitoring
+
+| Endpoint | Description |
+|----------|-------------|
+| `/health` | Full health check (DB, RPC, bot) |
+| `/ready` | Readiness probe |
+| `/live` | Liveness probe |
+| `/metrics` | Basic system metrics |
+
+**Health Check Flow**:
+```
+Railway → GET /health → Check DB connection → Check RPC connection → Check bot status → 200/503
+```
+
 ---
 
 ## Data Flow Examples
@@ -386,12 +433,34 @@ tb_user_settings
 
 ### Environment Variables
 ```
+# Required
 BOT_TOKEN                # Telegram bot token
 SUPABASE_URL             # Supabase project URL
 SUPABASE_ANON_KEY        # Supabase anon key
-SOLANA_RPC_URL           # Solana RPC endpoint
+SOLANA_RPC_URL           # Solana RPC endpoint (Helius recommended)
 MASTER_ENCRYPTION_KEY    # 64-char hex key for wallet encryption
-HELIUS_API_KEY           # (Optional) For dynamic priority fees
-USE_JITO                 # (Optional) Enable Jito bundles (default: true)
-JITO_TIP_LAMPORTS        # (Optional) Default Jito tip (default: 10000)
+
+# Optional - MEV Protection
+HELIUS_API_KEY           # For dynamic priority fees
+USE_JITO                 # Enable Jito bundles (default: true)
+JITO_TIP_LAMPORTS        # Default Jito tip (default: 50000)
+
+# Optional - Server Config
+PORT                     # Health check port (default: 3000)
+NODE_ENV                 # production/development
+LOG_LEVEL                # debug/info/warn/error (default: info)
 ```
+
+---
+
+## Test Suite (v0.5.0)
+
+| Test File | Tests | Description |
+|-----------|-------|-------------|
+| `encryption.test.ts` | 22 | AES-256-GCM encryption |
+| `security.test.ts` | 38 | Input validation |
+| `rateLimiter.test.ts` | 13 | Token bucket & sliding window |
+| `logger.test.ts` | 15 | Structured logging |
+| **Total** | **88** | All passing |
+
+Run tests: `npm test`

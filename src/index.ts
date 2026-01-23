@@ -13,11 +13,17 @@ import { PriceMonitor, LimitOrder, TriggerResult } from './trading/priceMonitor.
 import { db } from './services/database.js';
 import { WalletManager } from './wallet/manager.js';
 import { appConfig } from './utils/env.js';
+import { initLogger, createLogger } from './utils/logger.js';
+import { healthServer } from './services/health.js';
 
-console.log('='.repeat(50));
-console.log('  Solana Trading Bot');
-console.log('  Version: 0.4.1');
-console.log('='.repeat(50));
+// Initialize logger
+initLogger({ level: appConfig.logLevel });
+const logger = createLogger('Main');
+
+logger.info('='.repeat(50));
+logger.info('  Solana Trading Bot');
+logger.info('  Version: 0.5.0');
+logger.info('='.repeat(50));
 
 // Create bot instance
 const bot = createBot();
@@ -93,16 +99,18 @@ bot.on('message:text', handleMessage);
 
 // Error handler
 bot.catch((err) => {
-  console.error('Bot error:', err);
+  logger.error('Bot error', err);
 });
 
+// Start the health check server
+healthServer.start();
+
 // Start the bot
-console.log('Starting bot...');
+logger.info('Starting bot...');
 
 bot.start({
   onStart: async (botInfo) => {
-    console.log(`✅ Bot started: @${botInfo.username}`);
-    console.log('');
+    logger.info(`Bot started: @${botInfo.username}`);
 
     // Register bot commands for Telegram menu
     await bot.api.setMyCommands([
@@ -115,27 +123,44 @@ bot.start({
       { command: 'settings', description: 'Configure preferences' },
       { command: 'help', description: 'Get help' },
     ]);
-    console.log('✅ Bot commands registered');
+    logger.info('Bot commands registered');
 
     // Start the price monitor for SL/TP execution
     priceMonitor.start();
-    console.log('✅ Price monitor started (checking every 30s)');
-    console.log('');
-    console.log('Bot is ready to receive messages!');
+    logger.info('Price monitor started (checking every 30s)');
+
+    // Mark bot as healthy for health checks
+    healthServer.setBotHealthy(true);
+
+    logger.info('Bot is ready to receive messages!');
   },
 });
 
 // Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\nShutting down...');
+async function shutdown(signal: string): Promise<void> {
+  logger.info(`Received ${signal}, shutting down gracefully...`);
+
+  // Mark bot as unhealthy
+  healthServer.setBotHealthy(false);
+
+  // Stop services in order
   priceMonitor.stop();
   bot.stop();
+  healthServer.stop();
+
+  logger.info('Shutdown complete');
   process.exit(0);
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught exception', error);
+  shutdown('uncaughtException');
 });
 
-process.on('SIGTERM', () => {
-  console.log('\nShutting down...');
-  priceMonitor.stop();
-  bot.stop();
-  process.exit(0);
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled rejection', reason as Error);
 });

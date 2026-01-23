@@ -98,11 +98,13 @@ export interface SwapResult {
  * Execution mode for trades
  *
  * TURBO: Jito-only, skip confirmation, fastest possible (~1-2s)
- * FAST: Jito-first with 5s confirmation, RPC fallback (~2-5s)
+ * RACE: Send Jito AND Helius simultaneously, first to confirm wins (~2-4s)
+ * FAST: Jito-first with 8s confirmation, RPC fallback (~3-6s)
  * SAFE: Current behavior with longer timeouts (~30-60s)
  */
 export enum ExecutionMode {
   TURBO = 'turbo',
+  RACE = 'race',     // NEW: Parallel execution - fastest reliable method
   FAST = 'fast',
   SAFE = 'safe',
 }
@@ -147,8 +149,8 @@ export class JupiterClient {
     this.useJito = options?.useJito ?? true; // Enable Jito (now PRIMARY, not fallback)
     this.apiKey = options?.jupiterApiKey;
     this.rpcName = rpcUrl.includes('helius') ? 'Helius' : 'Primary RPC';
-    // Default to FAST mode for better speed
-    this.defaultExecutionMode = options?.executionMode ?? ExecutionMode.FAST;
+    // Default to RACE mode for optimal speed+reliability
+    this.defaultExecutionMode = options?.executionMode ?? ExecutionMode.RACE;
 
     // Initialize Jito client if enabled (now PRIMARY execution method)
     if (this.useJito) {
@@ -341,8 +343,127 @@ export class JupiterClient {
         };
       }
 
+      // ========== RACE MODE: Parallel Jito + Helius execution ==========
+      if (mode === ExecutionMode.RACE && shouldUseJito && this.jitoClient) {
+        console.log(`[Jupiter] RACE MODE: Sending Jito + ${this.rpcName} in parallel...`);
+
+        try {
+          // Calculate Jito tip
+          let jitoTip = options?.jitoTip ?? JitoClient.calculateRecommendedTip(tradeValueSol);
+          try {
+            const floor = await getJitoTipFloor();
+            jitoTip = Math.max(jitoTip, floor);
+          } catch { /* Use calculated tip */ }
+
+          console.log(`[Jupiter] Jito tip: ${(jitoTip / 1e9).toFixed(6)} SOL (~$${((jitoTip / 1e9) * 200).toFixed(2)})`);
+
+          // Prepare Jito transaction
+          const jitoTxBuf = Buffer.from(swapResponse.swapTransaction, 'base64');
+          const jitoTx = VersionedTransaction.deserialize(jitoTxBuf);
+          jitoTx.sign([keypair]);
+
+          // Prepare RPC transaction (separate copy)
+          const rpcTxBuf = Buffer.from(swapResponse.swapTransaction, 'base64');
+          const rpcTx = VersionedTransaction.deserialize(rpcTxBuf);
+          rpcTx.sign([keypair]);
+
+          // Create race between Jito and RPC
+          const jitoPromise = this.jitoClient!.sendTransaction(jitoTx, keypair, {
+            tipLamports: jitoTip,
+            waitForConfirmation: true,
+            maxWaitMs: 10000, // 10 seconds for Jito
+          }).then(result => ({ source: 'Jito' as const, result }));
+
+          const rpcPromise = this.sendTransactionRaceMode(
+            this.connection,
+            rpcTx,
+            8000 // 8 seconds for RPC
+          ).then(result => ({ source: 'RPC' as const, result }));
+
+          // Race both - first to succeed wins
+          const results = await Promise.allSettled([jitoPromise, rpcPromise]);
+
+          // Check which succeeded first
+          for (const settledResult of results) {
+            if (settledResult.status === 'fulfilled') {
+              const { source, result } = settledResult.value;
+
+              if (source === 'Jito') {
+                if (result.success && result.landed) {
+                  console.log(`[Jupiter] ✅ RACE: Jito won! Bundle: ${result.bundleId}`);
+                  return {
+                    success: true,
+                    signature: result.signature || result.bundleId,
+                    inputAmount: quoteResponse.inAmount,
+                    outputAmount: quoteResponse.outAmount,
+                    priceImpact: quoteResponse.priceImpactPct,
+                  };
+                }
+              } else if (source === 'RPC') {
+                if (result.success && result.signature) {
+                  console.log(`[Jupiter] ✅ RACE: ${this.rpcName} won! Sig: ${result.signature}`);
+                  return {
+                    success: true,
+                    signature: result.signature,
+                    inputAmount: quoteResponse.inAmount,
+                    outputAmount: quoteResponse.outAmount,
+                    priceImpact: quoteResponse.priceImpactPct,
+                  };
+                }
+              }
+            }
+          }
+
+          // Neither succeeded in race, check if any got a signature (might still land)
+          console.log(`[Jupiter] RACE: No immediate winner, checking results...`);
+
+          // Log what happened
+          for (const settledResult of results) {
+            if (settledResult.status === 'fulfilled') {
+              const { source, result } = settledResult.value;
+              if (source === 'Jito') {
+                console.log(`[Jupiter] Jito: ${result.error || (result.bundleId ? 'accepted but not confirmed' : 'failed')}`);
+              } else {
+                console.log(`[Jupiter] RPC: ${result.error || 'not confirmed in time'}`);
+              }
+            } else {
+              console.log(`[Jupiter] Error: ${settledResult.reason}`);
+            }
+          }
+
+          // Fall through to FAST mode fallback
+        } catch (raceErr) {
+          console.log(`[Jupiter] RACE error: ${(raceErr as Error).message}`);
+        }
+
+        // RACE mode fallback: Try once more with RPC only (fresh tx)
+        console.log(`[Jupiter] RACE fallback: Fresh ${this.rpcName} attempt...`);
+        const fallbackResult = await this.sendWithConnection(
+          this.connection,
+          quoteResponse,
+          keypair,
+          priorityFee,
+          1,
+          8000,
+          true // Skip preflight for speed
+        );
+
+        if (fallbackResult.success) {
+          console.log(`[Jupiter] ✅ RACE fallback succeeded: ${fallbackResult.signature}`);
+          return fallbackResult;
+        }
+
+        return {
+          success: false,
+          error: `RACE mode: All attempts failed`,
+          inputAmount: quoteResponse.inAmount,
+          outputAmount: quoteResponse.outAmount,
+          priceImpact: quoteResponse.priceImpactPct,
+        };
+      }
+
       // ========== JITO-FIRST EXECUTION (TURBO and FAST modes) ==========
-      if (shouldUseJito && this.jitoClient && mode !== ExecutionMode.SAFE) {
+      if (shouldUseJito && this.jitoClient && (mode === ExecutionMode.TURBO || mode === ExecutionMode.FAST)) {
         console.log(`[Jupiter] Tier 1: Jito bundles (parallel to all endpoints)...`);
 
         try {
@@ -526,6 +647,57 @@ export class JupiterClient {
         outputAmount: quoteResponse.outAmount,
         priceImpact: quoteResponse.priceImpactPct,
       };
+    }
+  }
+
+  /**
+   * Helper: Send pre-signed transaction and poll for confirmation (for RACE mode)
+   *
+   * @param connection - RPC connection to use
+   * @param signedTx - Already signed transaction
+   * @param timeoutMs - Max time to wait for confirmation
+   */
+  private async sendTransactionRaceMode(
+    connection: Connection,
+    signedTx: VersionedTransaction,
+    timeoutMs: number
+  ): Promise<{ success: boolean; signature?: string; error?: string }> {
+    try {
+      // Send transaction (skip preflight for speed)
+      const signature = await connection.sendTransaction(signedTx, {
+        skipPreflight: true,
+        maxRetries: 0,
+        preflightCommitment: 'confirmed',
+      });
+
+      // Poll for confirmation with fast interval
+      const POLL_INTERVAL_MS = 150; // Very fast polling for race
+      const startTime = Date.now();
+
+      while (Date.now() - startTime < timeoutMs) {
+        const status = await connection.getSignatureStatus(signature);
+
+        if (status.value !== null) {
+          if (status.value.err) {
+            return { success: false, error: `Tx failed: ${JSON.stringify(status.value.err)}` };
+          }
+          if (status.value.confirmationStatus === 'confirmed' || status.value.confirmationStatus === 'finalized') {
+            return { success: true, signature };
+          }
+        }
+
+        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+      }
+
+      // Timeout - one more check
+      const finalStatus = await connection.getSignatureStatus(signature);
+      if (finalStatus.value?.confirmationStatus === 'confirmed' || finalStatus.value?.confirmationStatus === 'finalized') {
+        return { success: true, signature };
+      }
+
+      return { success: false, signature, error: 'Confirmation timeout' };
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
     }
   }
 

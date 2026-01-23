@@ -41,6 +41,9 @@ export interface AppConfig {
 
   // Logging
   logLevel: string;
+
+  // Environment
+  isProduction: boolean;
 }
 
 /**
@@ -125,6 +128,9 @@ function loadConfig(): AppConfig {
 
     // Logging
     logLevel: process.env.LOG_LEVEL || 'info',
+
+    // Environment
+    isProduction: process.env.NODE_ENV === 'production',
   };
 }
 

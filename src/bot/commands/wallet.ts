@@ -12,8 +12,13 @@ import {
 import { db } from '../../services/database.js';
 import { WalletManager } from '../../wallet/manager.js';
 import { appConfig } from '../../utils/env.js';
+import { dailyLimits } from '../../utils/rateLimiter.js';
+import { auditService, AuditAction } from '../../services/audit.js';
+import { createLogger } from '../../utils/logger.js';
 import QRCode from 'qrcode';
 import { InputFile } from 'grammy';
+
+const logger = createLogger('Wallet');
 
 // Create wallet manager instance
 const walletManager = new WalletManager(
@@ -177,6 +182,10 @@ export async function createWallet(ctx: BotContext): Promise<void> {
       throw new Error('Failed to save wallet');
     }
 
+    // Audit log: wallet created
+    await auditService.logWalletCreate(userId, publicAddress, false);
+    logger.info('Wallet created', { userId, publicAddress: publicAddress.slice(0, 8) + '...' });
+
     // Show success
     const message = `
 ✅ *Wallet Created!*
@@ -194,7 +203,7 @@ export async function createWallet(ctx: BotContext): Promise<void> {
       reply_markup: walletMenuKeyboard(true),
     });
   } catch (error) {
-    console.error('Error creating wallet:', error);
+    logger.error('Error creating wallet', error, { userId });
     await sendError(ctx, 'Failed to create wallet. Please try again.');
   }
 }
@@ -283,6 +292,10 @@ export async function handlePrivateKeyImport(ctx: BotContext, privateKey: string
       // Ignore
     }
 
+    // Audit log: wallet imported
+    await auditService.logWalletCreate(userId, publicAddress, true);
+    logger.info('Wallet imported', { userId, publicAddress: publicAddress.slice(0, 8) + '...' });
+
     // Show success
     const message = `
 ✅ *Wallet Imported!*
@@ -298,7 +311,7 @@ Your wallet has been imported and encrypted securely.
       reply_markup: walletMenuKeyboard(true),
     });
   } catch (error) {
-    console.error('Error importing wallet:', error);
+    logger.error('Error importing wallet', error, { userId });
     await sendError(ctx, 'Failed to import wallet. Please check your private key and try again.');
   }
 }
@@ -460,22 +473,66 @@ export async function refreshBalance(ctx: BotContext): Promise<void> {
  * Show export key confirmation.
  */
 export async function showExportKeyConfirm(ctx: BotContext): Promise<void> {
+  const userId = getUserId(ctx);
+
+  // Check rate limit for key exports (max 3 per 24 hours)
+  const exportsRemaining = dailyLimits.keyExport.getMaxCount() - dailyLimits.keyExport.getCount(userId);
+  const timeUntilReset = dailyLimits.keyExport.getTimeUntilReset(userId);
+
+  if (exportsRemaining <= 0) {
+    const hoursRemaining = Math.ceil(timeUntilReset / (60 * 60 * 1000));
+    const message = `
+🚫 *Export Limit Reached*
+
+For your security, you can only export your private key *3 times* per 24 hours.
+
+⏱️ Try again in approximately *${hoursRemaining} hour${hoursRemaining !== 1 ? 's' : ''}*.
+
+If this is urgent, please contact support.
+    `.trim();
+
+    await auditService.logSecurityEvent(userId, AuditAction.RATE_LIMIT_EXCEEDED, {
+      action: 'key_export',
+      limit: 3,
+      window: '24h',
+    });
+
+    try {
+      await ctx.editMessageText(message, {
+        parse_mode: 'Markdown',
+        reply_markup: walletMenuKeyboard(true),
+      });
+    } catch {
+      await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_markup: walletMenuKeyboard(true),
+      });
+    }
+    return;
+  }
+
   const message = `
 🔑 *Export Private Key*
 
-⚠️ *WARNING:*
-• Your private key gives full access to your wallet
-• Never share it with anyone
-• Store it in a secure location
-• Anyone with your key can steal your funds
+⚠️ *SECURITY WARNING:*
+• Your private key gives *FULL ACCESS* to your wallet
+• *NEVER* share it with anyone
+• Store it in a *SECURE* offline location
+• Anyone with your key can *STEAL ALL YOUR FUNDS*
 
-Are you sure you want to export your private key?
+🔒 *Security Notice:*
+• Exports remaining today: *${exportsRemaining}/3*
+• This action is logged for security
+
+Are you absolutely sure you want to export your private key?
   `.trim();
 
   const keyboard = {
     inline_keyboard: [
       [
-        { text: '✅ Yes, Export', callback_data: 'wallet:confirm_export' },
+        { text: '✅ Yes, I Understand', callback_data: 'wallet:confirm_export' },
+      ],
+      [
         { text: '❌ Cancel', callback_data: 'menu:wallet' },
       ],
     ],
@@ -506,9 +563,24 @@ export async function exportPrivateKey(ctx: BotContext): Promise<void> {
     return;
   }
 
+  // Check and consume rate limit
+  if (!dailyLimits.keyExport.record(userId)) {
+    // This shouldn't happen if showExportKeyConfirm was called first, but double-check
+    await showExportKeyConfirm(ctx);
+    return;
+  }
+
   try {
     // Export private key
     const privateKey = walletManager.exportPrivateKey(wallet);
+
+    // Audit log: private key exported (CRITICAL security event)
+    await auditService.logWalletExport(userId, wallet.publicAddress);
+    logger.warn('Private key exported', {
+      userId,
+      publicAddress: wallet.publicAddress.slice(0, 8) + '...',
+      remainingExports: dailyLimits.keyExport.getMaxCount() - dailyLimits.keyExport.getCount(userId),
+    });
 
     // Send in a new message that will auto-delete hint
     const message = `
@@ -516,9 +588,12 @@ export async function exportPrivateKey(ctx: BotContext): Promise<void> {
 
 \`${privateKey}\`
 
-⚠️ *Save this securely and delete this message!*
+⚠️ *IMPORTANT:*
+• Save this securely and *DELETE THIS MESSAGE*
+• This key gives *FULL ACCESS* to your wallet
+• Never share it with anyone
 
-_This key gives full access to your wallet_
+🔒 This export has been logged for security.
     `.trim();
 
     // Delete previous message
@@ -533,7 +608,7 @@ _This key gives full access to your wallet_
       reply_markup: walletMenuKeyboard(true),
     });
   } catch (error) {
-    console.error('Error exporting key:', error);
+    logger.error('Error exporting key', error, { userId });
     await sendError(ctx, 'Failed to export private key. Please try again.');
   }
 }
@@ -581,6 +656,10 @@ Are you sure you want to delete your wallet?
 export async function deleteWallet(ctx: BotContext): Promise<void> {
   const userId = getUserId(ctx);
 
+  // Get wallet first for audit logging
+  const wallet = await db.getWallet(userId);
+  const publicAddress = wallet?.publicAddress || 'unknown';
+
   try {
     // Delete from database
     const deleted = await db.deleteWallet(userId);
@@ -588,6 +667,10 @@ export async function deleteWallet(ctx: BotContext): Promise<void> {
     if (!deleted) {
       throw new Error('Failed to delete wallet');
     }
+
+    // Audit log: wallet deleted
+    await auditService.logWalletDelete(userId, publicAddress);
+    logger.info('Wallet deleted', { userId, publicAddress: publicAddress.slice(0, 8) + '...' });
 
     const message = `
 ✅ *Wallet Deleted*
@@ -602,7 +685,7 @@ You can now create a new wallet or import an existing one.
       reply_markup: walletMenuKeyboard(false),
     });
   } catch (error) {
-    console.error('Error deleting wallet:', error);
+    logger.error('Error deleting wallet', error, { userId });
     await sendError(ctx, 'Failed to delete wallet. Please try again.');
   }
 }
